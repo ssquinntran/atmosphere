@@ -6,6 +6,7 @@
  * - Blue-noise start jitter + adaptive empty-space stride skipping
  * - Beer-Lambert extinction, 4-step sun self-shadowing + powder edge term
  * - Dual-lobe Henyey-Greenstein scattering + horizon aerial perspective
+ * - 4-mode shader inspection overlay (Final, Transmittance, Radial Depth, 3D Noise Slice)
  */
 export const atmosphereFragmentShader = /* glsl */ `
 precision highp float;
@@ -25,6 +26,7 @@ uniform vec4 uWindAndTime;           // xy: windXZ, z: elapsedSeconds, w: extinc
 uniform vec4 uCameraPosAndSteps;     // xyz: cameraWorldPos, w: maxPrimarySteps
 uniform vec4 uCameraForwardAndNear;  // xyz: normalized cameraForward, w: cameraNear
 uniform vec4 uViewportAndFar;        // xy: viewportResolution, z: cameraFar, w: detailErosionStrength
+uniform vec4 uDebugParams;           // x: debugMode (0=Final, 1=Transmittance, 2=Depth, 3=NoiseSlice), yzw: reserved
 
 uniform sampler3D uMacroNoise;
 uniform sampler3D uDetailNoise;
@@ -166,6 +168,60 @@ void main() {
   float cosViewAngle = max(dot(rayDir, uCameraForwardAndNear.xyz), 0.001);
   float tScene = zView / cosViewAngle;
 
+  int debugMode = int(uDebugParams.x + 0.5);
+
+  // Debug Mode 2: Radial Scene Depth (tScene) with 50m Euclidean distance contour rings
+  if (debugMode == 2) {
+    float normDepth = clamp(tScene / 950.0, 0.0, 1.0);
+    float contour = 1.0 - smoothstep(0.0, 0.06, abs(fract(tScene / 50.0) - 0.5));
+    vec3 nearCol = vec3(0.12, 0.85, 0.95);
+    vec3 midCol  = vec3(0.18, 0.42, 0.88);
+    vec3 farCol  = vec3(0.05, 0.09, 0.18);
+    vec3 depthCol = normDepth < 0.45
+      ? mix(nearCol, midCol, normDepth / 0.45)
+      : mix(midCol, farCol, (normDepth - 0.45) / 0.55);
+    depthCol = mix(depthCol, vec3(1.0, 0.95, 0.75), contour * 0.35);
+    fragColor = vec4(depthCol, 0.92);
+    return;
+  }
+
+  // Debug Mode 3: Horizontal 3D Noise Volume Slice at mid-cloud altitude
+  if (debugMode == 3) {
+    float sliceY = mix(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, 0.42);
+    float denomY = abs(rayDir.y) > 1e-4 ? rayDir.y : (rayDir.y >= 0.0 ? 1e-4 : -1e-4);
+    float tSlice = (sliceY - rayOrigin.y) / denomY;
+    float tSample = tSlice > 0.0 ? min(tSlice, tScene) : max(tNear, 60.0);
+    vec3 slicePos = rayOrigin + rayDir * tSample;
+
+    vec2 boxMinXZ = uBoundsMinAndFade.xz;
+    vec2 boxMaxXZ = uBoundsMaxAndCoverage.xz;
+    vec2 boxSizeXZ = boxMaxXZ - boxMinXZ;
+    vec2 normXZ = abs((slicePos.xz - 0.5 * (boxMinXZ + boxMaxXZ)) / (0.5 * boxSizeXZ));
+
+    if (max(normXZ.x, normXZ.y) > 1.0) {
+      discard;
+    }
+
+    vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
+    vec3 macroUVW = (slicePos + vec3(windOffset.x, 0.0, windOffset.y)) * 0.0024;
+    vec3 detailUVW = (slicePos + vec3(windOffset.x * 1.35, uWindAndTime.z * 1.5, windOffset.y * 1.35)) * 0.011;
+
+    vec4 macro = texture(uMacroNoise, macroUVW);
+    vec3 detail = texture(uDetailNoise, detailUVW).rgb;
+    float sculptedDensity = sampleCloudDensity(slicePos, true);
+
+    // R: Perlin-Worley macro base, G: medium Worley lobes, B: high-freq Worley erosion
+    vec3 noiseVis = vec3(macro.r, macro.g, detail.r);
+    float thresholdRing = 1.0 - smoothstep(0.0, 0.035, abs(sculptedDensity - 0.08));
+    noiseVis = mix(
+      noiseVis,
+      vec3(0.22, 0.95, 1.0),
+      thresholdRing * (sculptedDensity > 0.001 ? 0.75 : 0.0)
+    );
+    fragColor = vec4(noiseVis, 0.94);
+    return;
+  }
+
   tFar = min(tFar, tScene);
 
   if (tNear >= tFar) {
@@ -251,6 +307,16 @@ void main() {
     t += stepSize;
   }
 
+  // Debug Mode 1: Optical Transmittance T in [0..1] (coral tint marks T <= 0.01 early-out cores)
+  if (debugMode == 1) {
+    vec3 transVis = vec3(transmittance);
+    if (transmittance <= 0.012) {
+      transVis = vec3(0.95, 0.35, 0.15);
+    }
+    fragColor = vec4(transVis, 0.90);
+    return;
+  }
+
   float alpha = clamp(1.0 - transmittance, 0.0, 1.0);
   if (alpha <= 0.002) {
     discard;
@@ -261,7 +327,11 @@ void main() {
   // Aerial perspective blend into maritime horizon haze
   float avgDist = totalWeight > 0.0 ? (weightedDist / totalWeight) : tNear;
   float hazeFactor = 1.0 - exp(-max(avgDist - 120.0, 0.0) * uSkyColorAndHaze.w);
-  vec3 horizonColor = mix(ambientSky * 0.95, sunRadiance * 0.55 + ambientSky * 0.55, max(cosTheta, 0.0) * 0.45);
+  vec3 horizonColor = mix(
+    ambientSky * 0.95,
+    sunRadiance * 0.55 + ambientSky * 0.55,
+    max(cosTheta, 0.0) * 0.45
+  );
   cloudColor = mix(cloudColor, horizonColor, clamp(hazeFactor, 0.0, 0.85));
 
   fragColor = vec4(cloudColor, alpha);
