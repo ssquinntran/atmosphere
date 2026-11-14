@@ -3,6 +3,13 @@ import { atmosphereVertexShader } from '../shaders/atmosphere.vert.js';
 import { atmosphereFragmentShader } from '../shaders/atmosphere.frag.js';
 import { CloudNoiseBaker } from '../noise/CloudNoiseBaker.js';
 
+export const DEBUG_MODES = {
+  final: 0,
+  transmittance: 1,
+  depth: 2,
+  noise: 3,
+};
+
 export const WEATHER_PRESETS = {
   tradeWinds: {
     coverage: 0.56,
@@ -48,6 +55,7 @@ export class AtmosphereLayer {
     this.state = {
       ...WEATHER_PRESETS.tradeWinds,
       maxSteps: options.maxSteps ?? 36,
+      debugMode: options.debugMode ?? DEBUG_MODES.final,
     };
 
     this.macroNoise = null;
@@ -99,6 +107,7 @@ export class AtmosphereLayer {
         uCameraPosAndSteps: { value: new THREE.Vector4(0, 180, 320, this.state.maxSteps) },
         uCameraForwardAndNear: { value: new THREE.Vector4(0, -0.4, -0.9, 1.0) },
         uViewportAndFar: { value: new THREE.Vector4(1280, 720, 4000.0, 0.24) },
+        uDebugParams: { value: new THREE.Vector4(this.state.debugMode, 0.0, 0.0, 0.0) },
         uMacroNoise: { value: this.macroNoise },
         uDetailNoise: { value: this.detailNoise },
         uWeatherMap: { value: this.weatherMap },
@@ -120,6 +129,14 @@ export class AtmosphereLayer {
   setSceneDepthTexture(depthTexture) {
     if (this.material) {
       this.material.uniforms.uSceneDepth.value = depthTexture;
+    }
+  }
+
+  setDebugMode(mode) {
+    const modeId = typeof mode === 'string' ? (DEBUG_MODES[mode] ?? 0) : Number(mode) || 0;
+    this.state.debugMode = Math.min(Math.max(Math.round(modeId), 0), 3);
+    if (this.material) {
+      this.material.uniforms.uDebugParams.value.x = this.state.debugMode;
     }
   }
 
@@ -192,6 +209,7 @@ export class AtmosphereLayer {
     this.material.uniforms.uWindAndTime.value.w = this.state.extinction;
 
     this.material.uniforms.uCameraPosAndSteps.value.w = this.state.maxSteps;
+    this.material.uniforms.uDebugParams.value.x = this.state.debugMode;
   }
 
   getSunDirection() {
