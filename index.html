@@ -44,7 +44,7 @@
       border-radius: 8px;
       padding: 12px 16px;
       pointer-events: none;
-      max-width: 365px;
+      max-width: 375px;
     }
 
     .hud-header h1 {
@@ -80,7 +80,7 @@
       position: fixed;
       top: 16px;
       right: 16px;
-      width: 325px;
+      width: 335px;
       background: var(--bg-panel);
       border: 1px solid var(--border-subtle);
       backdrop-filter: blur(10px);
@@ -89,7 +89,7 @@
       font-size: 12px;
       display: flex;
       flex-direction: column;
-      gap: 11px;
+      gap: 10px;
       max-height: calc(100vh - 32px);
       overflow-y: auto;
     }
@@ -163,13 +163,13 @@
     .control-group {
       display: flex;
       flex-direction: column;
-      gap: 7px;
+      gap: 6px;
     }
 
     .slider-row {
       display: flex;
       flex-direction: column;
-      gap: 3px;
+      gap: 2px;
     }
 
     .slider-label {
@@ -234,7 +234,7 @@
 
   <div class="hud-header">
     <h1>Atmosphere Layer // WebGL2</h1>
-    <p>Volumetric raymarched clouds (all 10 WMO cloud genera), continuous island-to-canyon mountain morphing, sub-cloud rain shafts, and synchronized terrain/ocean cloud shadows.</p>
+    <p>Volumetric clouds (10 WMO genera), Rankine tornado waterspout, vertex-displaced tsunami &amp; whirlpool hydrodynamics, Spatial-Hash + Union-Find particle physics, and Saronic ASV fleet.</p>
     <div class="genus-badge" id="genus-info">
       <strong>Cumulus (Cu) · Low (90–260 m):</strong> Detached, dense cauliflower towers with crisp flat bases and sunlit domes.
     </div>
@@ -246,7 +246,7 @@
       <div class="preset-row">
         <button class="preset-btn active" data-preset="tradeWinds">Trade Winds</button>
         <button class="preset-btn" data-preset="clearPatrol">High Cirrus</button>
-        <button class="preset-btn" data-preset="squall">Rain Squall</button>
+        <button class="preset-btn" data-preset="squall">Tornado Squall</button>
       </div>
     </div>
 
@@ -280,7 +280,7 @@
         <option value="0" selected>1: Final Composite (Lit Clouds + Rain)</option>
         <option value="1">2: Optical Transmittance T (Cloud Opacity Map)</option>
         <option value="2">3: Radial Scene Depth tScene (50m Contours)</option>
-        <option value="3">4: 3D Noise Slice (R=Perlin, G=Worley, B=Detail)</option>
+        <option value="3">4: 3D Noise &amp; Topographic Airflow Slice</option>
       </select>
       <div class="debug-caption" id="debug-caption">
         Full physically-based volumetric cloud rendering with sunlight scattering, self-shadowing, and rain.
@@ -288,7 +288,31 @@
     </div>
 
     <div class="control-group">
-      <div class="section-title">Landform & Canyon Morph</div>
+      <div class="section-title">Vortex, Tsunami, Whirlpool &amp; Tides</div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Tornado / Waterspout Vortex</span><span class="val" id="val-tornado">0%</span></div>
+        <input type="range" id="ctrl-tornado" min="0.00" max="1.00" step="0.02" value="0.00" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Tsunami Soliton Wave</span><span class="val" id="val-tsunami">0%</span></div>
+        <input type="range" id="ctrl-tsunami" min="0.00" max="1.00" step="0.02" value="0.00" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Whirlpool Maelstrom</span><span class="val" id="val-whirlpool">0%</span></div>
+        <input type="range" id="ctrl-whirlpool" min="0.00" max="1.00" step="0.02" value="0.00" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Tidal Sea Level (In/Out)</span><span class="val" id="val-tide">0.0 m (Mean Tide)</span></div>
+        <input type="range" id="ctrl-tide" min="-5.0" max="12.0" step="0.5" value="0.0" />
+      </div>
+    </div>
+
+    <div class="control-group">
+      <div class="section-title">Landform &amp; Canyon Morph</div>
 
       <div class="slider-row">
         <div class="slider-label"><span>Islands → Canyon Mountains</span><span class="val" id="val-terrain-morph">65% (Fjord Canyon)</span></div>
@@ -307,7 +331,7 @@
     </div>
 
     <div class="control-group">
-      <div class="section-title">Atmosphere, Clarity & Rain</div>
+      <div class="section-title">Atmosphere, Clarity &amp; Rain</div>
 
       <div class="slider-row">
         <div class="slider-label"><span>Cloud Coverage</span><span class="val" id="val-coverage">65%</span></div>
@@ -346,7 +370,7 @@
     </div>
 
     <div>
-      <div class="section-title">Live Frame Telemetry</div>
+      <div class="section-title">Live Frame &amp; Union-Find Telemetry</div>
       <div class="telemetry-grid">
         <div>
           <div class="metric-label">Frame Rate</div>
@@ -357,12 +381,12 @@
           <div class="metric-value" id="stat-gpu">-- ms</div>
         </div>
         <div>
-          <div class="metric-label">Draw Calls</div>
-          <div class="metric-value" id="stat-calls">--</div>
+          <div class="metric-label">Union-Find Clusters</div>
+          <div class="metric-value" id="stat-clusters">-- (Max: --)</div>
         </div>
         <div>
-          <div class="metric-label">3D Noise VRAM</div>
-          <div class="metric-value" id="stat-vram">1.26 MB</div>
+          <div class="metric-label">DSU Land / Water</div>
+          <div class="metric-value" id="stat-topology">-- Isl / -- Sea</div>
         </div>
       </div>
     </div>
