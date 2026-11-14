@@ -1,7 +1,9 @@
 /**
- * Custom #version 300 es volumetric cloud, topographic airflow & precipitation fragment shader.
+ * Custom #version 300 es volumetric cloud, Rankine tornado vortex, topographic airflow & precipitation fragment shader.
  * Features:
  * - Analytical Ray-AABB intersection
+ * - 3D Rankine Vortex Tornado / Maritime Waterspout funnel (helical swirl, hollow eye wall, sea-spray touchdown collar)
+ * - Volumetric internal storm lightning flash illumination
  * - 3D Topographic Air-Land Interaction (uTerrainMap):
  *   - Potential-flow streamline deflection around mountain flanks & into canyon gorges
  *   - Orographic updraft lift over windward slopes + leeward wake turbulence
@@ -37,6 +39,7 @@ uniform vec4 uViewportAndFar;        // xy: viewportResolution, z: cameraFar, w:
 uniform vec4 uDebugParams;           // x: debugMode (0=Final, 1=Transmittance, 2=Depth, 3=NoiseSlice), y: cloudGenusId (0..9), z: rainIntensity (0..1), w: densityMultiplier
 uniform vec4 uWorldOriginOffset;     // xy: floating-origin RTC offset XZ (meters), zw: reserved
 uniform vec4 uCloudShapeParams;      // x: horizontalScale, y: verticalStretch, z: cellularity (0=stratiform, 1=cumuliform), w: wispsAndShear
+uniform vec4 uVortexAndTide;         // xy: tornadoCenterXZ, z: tornadoStrength [0..1], w: tidalWaterLevel (meters)
 
 uniform sampler3D uMacroNoise;
 uniform sampler3D uDetailNoise;
@@ -102,33 +105,27 @@ void evaluateTopographicAirflow(
   vec2 terrainUV = clamp((worldPos.xz - boxMin.xz) / boxSize.xz, 0.002, 0.998);
   vec4 tSample = texture(uTerrainMap, terrainUV);
 
-  outTerrainY = tSample.r * TERRAIN_MAX_NORM_H;
-  vec2 gradXZ = (tSample.gb - 0.5) * 2.0; // Normalized terrain slope gradient (points uphill)
-  float canyonMask = tSample.a;           // 1.0 in flooded gorges, 0.0 on ridges
+  outTerrainY = max(tSample.r * TERRAIN_MAX_NORM_H, uVortexAndTide.w);
+  vec2 gradXZ = (tSample.gb - 0.5) * 2.0;
+  float canyonMask = tSample.a;
 
   // 1. 3D Solid-landmass obstacle exclusion: zero density inside rock, smooth boundary cushion above slope
-  outClearanceMask = smoothstep(outTerrainY + 1.0, outTerrainY + 20.0, worldPos.y);
+  outClearanceMask = smoothstep(outTerrainY + 0.5, outTerrainY + 18.0, worldPos.y);
 
-  // Height of air parcel relative to local mountain terrain
   float altAboveTerrain = max(worldPos.y - outTerrainY, 0.0);
   float interactionZone = 1.0 - smoothstep(0.0, 135.0, altAboveTerrain);
 
-  // Wind direction unit vector
   float windLen = length(uWindAndTime.xy);
   vec2 windDir = windLen > 0.01 ? (uWindAndTime.xy / windLen) : vec2(0.848, 0.530);
 
-  // Uphill wind component: positive when air blows directly up a windward mountain slope
   float uphillAlignment = dot(windDir, gradXZ);
 
-  // 2. Orographic vertical lift: air parcel is pushed upward over high terrain & windward slopes
+  // 2. Orographic vertical lift over windward slopes & mountain peaks
   float baseRidgeLift = clamp(outTerrainY - boxMin.y * 0.45, 0.0, 95.0) * 0.48;
   float windwardUpdraft = max(uphillAlignment, 0.0) * 34.0;
   outOrographicLiftY = (baseRidgeLift + windwardUpdraft) * interactionZone;
 
-  // 3. Horizontal potential-flow streamline deflection around mountain massifs & into gorges:
-  //    - Air is pushed away from steep mountain slopes (-gradXZ)
-  //    - Air swirls tangentially around peak flanks (perpGrad)
-  //    - Air accelerates along low-resistance canyon gorge channels (canyonMask)
+  // 3. Horizontal potential-flow streamline deflection around mountain massifs & into gorges
   vec2 perpGrad = vec2(-gradXZ.y, gradXZ.x);
   float tangentSign = sign(dot(windDir, perpGrad) + 0.001);
   float blockStrength = smoothstep(25.0, 180.0, outTerrainY) * interactionZone;
@@ -143,41 +140,82 @@ void evaluateTopographicAirflow(
   outOrographicMod = clamp(uphillAlignment * 0.32 * interactionZone, -0.18, 0.28);
 }
 
+/**
+ * Evaluates 3D Rankine Vortex Tornado / Waterspout funnel density from sea surface up into cloud deck.
+ */
+float evaluateTornadoFunnel(vec3 worldPos, vec3 boxMin, vec3 boxMax, float terrainY) {
+  float tornadoStrength = uVortexAndTide.z;
+  if (tornadoStrength <= 0.01) return 0.0;
+
+  float waterLevel = uVortexAndTide.w;
+  float minFunnelY = max(terrainY, waterLevel);
+  float maxFunnelY = boxMin.y + (boxMax.y - boxMin.y) * 0.65;
+  if (worldPos.y < minFunnelY || worldPos.y > maxFunnelY) return 0.0;
+
+  // Normalized height from water surface (0.0) to mesocyclone cloud collar (1.0)
+  float fh = clamp((worldPos.y - waterLevel) / max(maxFunnelY - waterLevel, 25.0), 0.0, 1.0);
+
+  // Subtle serpentine sway of the tornado vortex core with altitude & time
+  float t = uWindAndTime.z;
+  vec2 sway = vec2(
+    sin(fh * 4.2 - t * 2.4) * 11.0 * (1.0 - fh * 0.5),
+    cos(fh * 3.6 - t * 2.1) * 9.0 * (1.0 - fh * 0.5)
+  );
+  vec2 vortexCenter = uVortexAndTide.xy + sway;
+  vec2 relXZ = worldPos.xz - vortexCenter;
+  float r = length(relXZ);
+
+  // Tapering Rankine funnel radius: narrow near water (16m), flaring wide into wall cloud at top (92m)
+  float funnelRadius = mix(15.0, 62.0, pow(fh, 1.55)) + pow(max(fh - 0.55, 0.0) / 0.45, 2.0) * 58.0;
+  if (r > funnelRadius * 2.2) return 0.0;
+
+  // Helical coordinate twist around vortex axis
+  float angle = atan(relXZ.y, relXZ.x) + t * 5.8 - fh * 9.5 + (25.0 / (r + 8.0));
+  vec3 vortexUVW = vec3(
+    cos(angle) * 0.28 + 0.5,
+    fh * 1.6 - t * 0.55,
+    sin(angle) * 0.28 + 0.5
+  );
+  vec4 vNoise = texture(uMacroNoise, vortexUVW);
+  float helicalFbm = vNoise.r * 0.55 + vNoise.g * 0.30 + vNoise.b * 0.15;
+
+  // Hollow low-pressure inner eye + dense spinning condensation wall
+  float innerEye = smoothstep(funnelRadius * 0.14, funnelRadius * 0.42, r);
+  float outerWall = 1.0 - smoothstep(funnelRadius * 0.52, funnelRadius * 1.35, r);
+  float funnelShell = innerEye * outerWall;
+
+  // Sea-spray cascade collar where the waterspout touches down on the water surface
+  float sprayHeight = 1.0 - smoothstep(0.0, 0.22, fh);
+  float sprayRing = (1.0 - smoothstep(14.0, 52.0, abs(r - 26.0))) * sprayHeight * 0.95;
+
+  float rawVortex = (funnelShell * (0.55 + 0.65 * helicalFbm) + sprayRing * helicalFbm) * tornadoStrength;
+  return clamp(rawVortex * 2.4, 0.0, 1.8);
+}
+
 // Compute genus-specific vertical profile for all 10 WMO cloud genera (0..9)
 float computeGenusHeightProfile(int genusId, float h, vec3 weather) {
   if (genusId == 0) {
-    // 0: Cumulus (Cu) — crisp flat condensation base, rounded cauliflower towers
     float maxTop = mix(0.55, 0.98, weather.g);
     return smoothstep(0.0, 0.09, h) * (1.0 - smoothstep(maxTop * 0.55, maxTop, h));
   } else if (genusId == 1) {
-    // 1: Stratus (St) — uniform low horizontal sheet with soft upper/lower boundaries
     return smoothstep(0.0, 0.18, h) * (1.0 - smoothstep(0.42, 0.85, h));
   } else if (genusId == 2) {
-    // 2: Stratocumulus (Sc) — lumpy honeycomb roll deck with distinct gaps
     float maxTop = mix(0.45, 0.78, weather.g);
     return smoothstep(0.0, 0.11, h) * (1.0 - smoothstep(maxTop * 0.65, maxTop, h));
   } else if (genusId == 3) {
-    // 3: Altocumulus (Ac) — mid-altitude mackerel sky cellular puffs
     float maxTop = mix(0.50, 0.85, weather.g);
     return smoothstep(0.05, 0.22, h) * (1.0 - smoothstep(maxTop * 0.68, maxTop, h));
   } else if (genusId == 4) {
-    // 4: Altostratus (As) — mid-altitude fibrous gray-blue sheet
     return smoothstep(0.0, 0.22, h) * (1.0 - smoothstep(0.58, 0.94, h));
   } else if (genusId == 5) {
-    // 5: Nimbostratus (Ns) — thick, dark, ragged rain-bearing storm deck
     return smoothstep(0.0, 0.07, h) * (1.0 - smoothstep(0.75, 0.99, h));
   } else if (genusId == 6) {
-    // 6: Cirrus (Ci) — high-altitude delicate ice-crystal filaments & mares' tails
-    float streakBand = exp(-pow((h - 0.52) * 3.1, 2.0));
-    return streakBand;
+    return exp(-pow((h - 0.52) * 3.1, 2.0));
   } else if (genusId == 7) {
-    // 7: Cirrocumulus (Cc) — high-altitude fine rippled ice cloudlets
     return exp(-pow((h - 0.50) * 3.6, 2.0));
   } else if (genusId == 8) {
-    // 8: Cirrostratus (Cs) — thin high-altitude translucent ice veil
     return smoothstep(0.08, 0.35, h) * (1.0 - smoothstep(0.65, 0.95, h));
   } else {
-    // 9: Cumulonimbus (Cb) — towering convective thunderhead with spreading upper anvil
     float tower = smoothstep(0.0, 0.06, h) * (1.0 - smoothstep(0.88, 1.0, h));
     float anvilSpread = smoothstep(0.66, 0.84, h) * (1.0 - smoothstep(0.92, 1.0, h));
     return max(tower, anvilSpread * 1.25);
@@ -190,13 +228,11 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   vec3 boxMax = uBoundsMaxAndCoverage.xyz;
   vec3 boxSize = boxMax - boxMin;
 
-  // Smooth horizontal edge feathering in local camera-centered slab prevents AABB seams
   vec2 normXZ = abs((worldPos.xz - 0.5 * (boxMin.xz + boxMax.xz)) / (0.5 * boxSize.xz));
   float edgeMask = (1.0 - smoothstep(0.82, 1.0, normXZ.x)) *
                    (1.0 - smoothstep(0.82, 1.0, normXZ.y));
   if (edgeMask <= 0.001) return 0.0;
 
-  // Evaluate 3D topographic air-land interaction (deflection around mountains, funneling into canyons, orographic lift)
   float terrainY = 0.0;
   float clearanceMask = 1.0;
   vec2 flowOffsetXZ = vec2(0.0);
@@ -214,46 +250,58 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
     orographicMod
   );
 
-  // Reject immediately if sample point is inside solid mountain rock
   if (clearanceMask <= 0.001) return 0.0;
+
+  // Evaluate 3D Rankine Vortex Tornado / Waterspout funnel density
+  float funnelDensity = evaluateTornadoFunnel(worldPos, boxMin, boxMax, terrainY) * edgeMask;
 
   // Apply Relative-To-Center (RTC) floating-origin offset + topographic streamline deflection
   vec2 globalXZ = worldPos.xz + uWorldOriginOffset.xy + flowOffsetXZ;
+
+  // Swirl cloud deck cyclonically around the tornado mesocyclone core when tornado is active
+  if (uVortexAndTide.z > 0.01) {
+    vec2 dVortex = worldPos.xz - uVortexAndTide.xy;
+    float rV = length(dVortex);
+    if (rV < 260.0) {
+      float swirlAngle = (1.0 - rV / 260.0) * 2.2 * uVortexAndTide.z;
+      float cs = cos(swirlAngle);
+      float sn = sin(swirlAngle);
+      vec2 rotDV = vec2(dVortex.x * cs - dVortex.y * sn, dVortex.x * sn + dVortex.y * cs);
+      globalXZ += (rotDV - dVortex);
+    }
+  }
+
   vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
 
   int genusId = int(uDebugParams.y + 0.5);
   float rainIntensity = uDebugParams.z;
   float densityMult = uDebugParams.w;
 
-  // Effective altitude after orographic lift over mountain ridges
   float liftedY = worldPos.y - orographicLiftY;
 
-  // Weather map lookup along deflected air streamlines
   float weatherFreq = (genusId == 3 || genusId == 7) ? 1.45 : 1.0;
   vec2 weatherUV = ((globalXZ - boxMin.xz) / boxSize.xz) * weatherFreq + windOffset * 0.00085;
   vec3 weather = texture(uWeatherMap, weatherUV).rgb;
 
-  // Sub-cloud volumetric rain shafts (virga / precipitation curtains below cloud base, blocked by terrain)
+  // Sub-cloud region: evaluate both tornado funnel column and volumetric rain shafts (virga)
   if (liftedY < boxMin.y) {
-    if (rainIntensity <= 0.01 || worldPos.y < terrainY) return 0.0;
-    float subH = clamp((worldPos.y - terrainY) / max(boxMin.y - terrainY, 10.0), 0.0, 1.0);
-    vec2 shearXZ = globalXZ + uWindAndTime.xy * (boxMin.y - liftedY) * 0.06;
-    vec2 rainUV = (shearXZ - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
-    float coreCov = texture(uWeatherMap, rainUV).r;
-    float shaftMask = smoothstep(0.45, 0.82, coreCov * uBoundsMaxAndCoverage.w * 1.5);
-    if (shaftMask > 0.01) {
-      vec3 streakUVW = vec3(shearXZ.x * 0.009, worldPos.y * 0.002 + uWindAndTime.z * 0.45, shearXZ.y * 0.009);
-      float streakNoise = texture(uDetailNoise, streakUVW).r;
-      outRainShaft = shaftMask * (0.45 + 0.55 * streakNoise) * rainIntensity * edgeMask * clearanceMask * smoothstep(0.0, 0.12, subH);
+    if (rainIntensity > 0.01 && worldPos.y >= terrainY) {
+      float subH = clamp((worldPos.y - terrainY) / max(boxMin.y - terrainY, 10.0), 0.0, 1.0);
+      vec2 shearXZ = globalXZ + uWindAndTime.xy * (boxMin.y - liftedY) * 0.06;
+      vec2 rainUV = (shearXZ - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
+      float coreCov = texture(uWeatherMap, rainUV).r;
+      float shaftMask = smoothstep(0.45, 0.82, coreCov * uBoundsMaxAndCoverage.w * 1.5);
+      if (shaftMask > 0.01) {
+        vec3 streakUVW = vec3(shearXZ.x * 0.009, worldPos.y * 0.002 + uWindAndTime.z * 0.45, shearXZ.y * 0.009);
+        float streakNoise = texture(uDetailNoise, streakUVW).r;
+        outRainShaft = shaftMask * (0.45 + 0.55 * streakNoise) * rainIntensity * edgeMask * clearanceMask * smoothstep(0.0, 0.12, subH);
+      }
     }
-    return 0.0;
+    return funnelDensity * densityMult;
   }
-
-  // Normalized altitude [0..1] inside cloud slab (using liftedY so clouds arch over windward peaks)
   float h = clamp((liftedY - boxMin.y) / boxSize.y, 0.0, 1.0);
-  if (liftedY > boxMax.y) return 0.0;
+  if (liftedY > boxMax.y) return funnelDensity * densityMult;
 
-  // Modulate coverage by weather map, user coverage slider, and windward orographic condensation
   float coverageBoost = 1.62;
   if (genusId == 1 || genusId == 4 || genusId == 5 || genusId == 8) {
     weather.r = mix(weather.r, 0.78, 0.55);
@@ -263,12 +311,11 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   }
 
   float localCoverage = clamp(weather.r * (uBoundsMaxAndCoverage.w * coverageBoost) + orographicMod, 0.0, 1.0);
-  if (localCoverage <= 0.03) return 0.0;
+  if (localCoverage <= 0.03) return funnelDensity * densityMult;
 
   float heightProfile = computeGenusHeightProfile(genusId, h, weather);
-  if (heightProfile <= 0.001) return 0.0;
+  if (heightProfile <= 0.001) return funnelDensity * densityMult;
 
-  // Apply wind shear for cirrus filaments and anvil tops
   float shearStrength = uCloudShapeParams.w;
   vec2 shearedXZ = globalXZ + windOffset + vec2(h * shearStrength * 85.0, h * shearStrength * 35.0);
 
@@ -276,7 +323,6 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   float vertStretch = uCloudShapeParams.y;
   float cellularity = uCloudShapeParams.z;
 
-  // Macro 3D Perlin-Worley FBM lookup using deflected XZ and orographically lifted Y
   vec3 macroUVW = vec3(
     shearedXZ.x * horizScale,
     liftedY * vertStretch,
@@ -303,10 +349,9 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   baseDensity = clamp(baseDensity, 0.0, 1.0) * edgeMask * clearanceMask;
 
   if (!highDetail || baseDensity <= 0.001) {
-    return baseDensity * densityMult;
+    return max(baseDensity, funnelDensity) * densityMult;
   }
 
-  // High-frequency Worley detail erosion (with extra wake curl near mountain ridges)
   float detailFreq = (genusId == 6 || genusId == 7) ? 0.016 : 0.0115;
   vec3 detailUVW = vec3(
     shearedXZ.x * 1.35,
@@ -320,7 +365,7 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
 
   float erosionWeight = uViewportAndFar.w * mix(0.55, 1.15, cellularity);
   float finalDensity = remap(baseDensity, detailModifier * erosionWeight, 1.0, 0.0, 1.0);
-  return max(finalDensity, 0.0) * densityMult;
+  return max(max(finalDensity, 0.0), funnelDensity) * densityMult;
 }
 
 float marchSunTransmittance(vec3 samplePos, vec3 sunDir) {
@@ -351,13 +396,12 @@ void main() {
   vec3 rayOrigin = uCameraPosAndSteps.xyz;
   vec3 rayDir = normalize(vWorldPos - rayOrigin);
 
-  // Prevent division-by-zero on axis-aligned rays
   vec3 safeRayDir = mix(rayDir, vec3(1e-5), lessThan(abs(rayDir), vec3(1e-5)));
 
-  // Expand raymarch box to include +65m orographic lift headroom above peaks and down to y=0 when raining
+  // Expand raymarch box down to waterLevel when rain or tornado funnel is active
   vec3 marchBoxMin = uBoundsMinAndFade.xyz;
-  if (uDebugParams.z > 0.01) {
-    marchBoxMin.y = 0.0;
+  if (uDebugParams.z > 0.01 || uVortexAndTide.z > 0.01) {
+    marchBoxMin.y = min(uVortexAndTide.w, 0.0);
   }
   vec3 marchBoxMax = uBoundsMaxAndCoverage.xyz + vec3(0.0, 65.0, 0.0);
 
@@ -371,7 +415,6 @@ void main() {
   float tNear = hit.x;
   float tFar = hit.y;
 
-  // Reconstruct radial Euclidean distance to opaque scene geometry (terrain / vessels / ocean)
   vec2 screenUV = gl_FragCoord.xy / uViewportAndFar.xy;
   float depthSample = texture(uSceneDepth, screenUV).r;
   float zView = linearizeDepth(depthSample, uCameraForwardAndNear.w, uViewportAndFar.z);
@@ -380,7 +423,6 @@ void main() {
 
   int debugMode = int(uDebugParams.x + 0.5);
 
-  // Debug Mode 2: Radial Scene Depth (tScene) with 50m Euclidean distance contour rings
   if (debugMode == 2) {
     float normDepth = clamp(tScene / 950.0, 0.0, 1.0);
     float contour = 1.0 - smoothstep(0.0, 0.06, abs(fract(tScene / 50.0) - 0.5));
@@ -395,7 +437,6 @@ void main() {
     return;
   }
 
-  // Debug Mode 3: Horizontal 3D Noise & Topographic Airflow Slice at mid-cloud altitude
   if (debugMode == 3) {
     float sliceY = mix(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, 0.35);
     float denomY = abs(rayDir.y) > 1e-4 ? rayDir.y : (rayDir.y >= 0.0 ? 1e-4 : -1e-4);
@@ -428,7 +469,6 @@ void main() {
       orographicMod
     );
 
-    // Highlight solid mountain peaks intersecting the horizontal slice
     if (slicePos.y < terrainY + 2.0) {
       float rockRim = smoothstep(terrainY - 12.0, terrainY + 2.0, slicePos.y);
       vec3 rockCol = mix(vec3(0.14, 0.16, 0.20), vec3(1.0, 0.68, 0.20), rockRim);
@@ -450,7 +490,6 @@ void main() {
     float dummyRain = 0.0;
     float sculptedDensity = sampleCloudDensity(slicePos, true, dummyRain);
 
-    // R: Perlin-Worley macro base, G: medium Worley lobes, B: high-freq Worley erosion
     vec3 noiseVis = vec3(macro.r, macro.g, detail.r);
     float thresholdRing = 1.0 - smoothstep(0.0, 0.035, abs(sculptedDensity - 0.08));
     noiseVis = mix(
@@ -472,7 +511,6 @@ void main() {
   float marchSpan = tFar - tNear;
   float baseStep = max(marchSpan / float(maxSteps), 2.2);
 
-  // Screen-space 64x64 blue-noise jitter converts banding into fine grain
   ivec2 noiseCoord = ivec2(mod(gl_FragCoord.xy, 64.0));
   float jitter = texelFetch(uBlueNoise, noiseCoord, 0).r;
 
@@ -490,6 +528,13 @@ void main() {
   float terrainFadeDist = uBoundsMinAndFade.w;
   int genusId = int(uDebugParams.y + 0.5);
   float rainIntensity = uDebugParams.z;
+  float tornadoStrength = uVortexAndTide.z;
+
+  // Stochastic volumetric sheet/core lightning flash inside heavy storms or tornado mesocyclones
+  float stormActivity = max(tornadoStrength, (genusId == 9 || genusId == 5) ? rainIntensity : 0.0);
+  float flashWave = pow(max(sin(uWindAndTime.z * 7.3) * sin(uWindAndTime.z * 19.7), 0.0), 12.0);
+  float lightningPulse = stormActivity > 0.25 ? flashWave * stormActivity * 6.5 : 0.0;
+  vec3 lightningOrigin = vec3(uVortexAndTide.x, uBoundsMinAndFade.y + 45.0, uVortexAndTide.y);
 
   bool inCloud = false;
   float weightedDist = 0.0;
@@ -501,19 +546,17 @@ void main() {
     }
 
     vec3 pos = rayOrigin + rayDir * t;
-    float stepSize = inCloud ? baseStep : baseStep * 1.65;
+    float stepSize = inCloud ? baseStep : baseStep * 1.60;
     float rainShaft = 0.0;
     float density = sampleCloudDensity(pos, inCloud, rainShaft);
 
     if (density > 0.001 || rainShaft > 0.001) {
       if (!inCloud && density > 0.001) {
-        // Step back once upon entering cloud boundary for crisp silhouette integration
         t = max(tNear, t - baseStep);
         inCloud = true;
         continue;
       }
 
-      // Soft terrain/vessel intersection fade prevents sharp polygon clipping
       float distToSurface = max(tScene - t, 0.0);
       float surfaceFade = smoothstep(0.0, terrainFadeDist, distToSurface);
       density *= surfaceFade;
@@ -529,19 +572,25 @@ void main() {
         float lightTransmittance = marchSunTransmittance(pos, sunDir);
         vec3 directLight = sunRadiance * lightTransmittance * (0.28 + 1.35 * phase);
 
-        // Rich vertical ambient gradient: dark storm bases, bright sky-lit tops
         float baseDarkening = (genusId == 5 || genusId == 9) ? 0.18 : 0.34;
-        baseDarkening *= mix(1.0, 0.55, rainIntensity);
+        baseDarkening *= mix(1.0, 0.55, max(rainIntensity, tornadoStrength * 0.75));
         vec3 bottomAmbient = ambientSky * baseDarkening;
         vec3 topAmbient = mix(ambientSky * 1.22, vec3(0.96, 0.98, 1.0), 0.35);
         vec3 indirectLight = mix(bottomAmbient, topAmbient, smoothstep(0.0, 0.85, heightFrac));
 
-        vec3 luminance = directLight + indirectLight;
+        // Internal volumetric lightning emission inside mesocyclone / storm core
+        vec3 lightningLight = vec3(0.0);
+        if (lightningPulse > 0.01) {
+          float dLight = length(pos - lightningOrigin);
+          float atten = exp(-dLight / 145.0);
+          lightningLight = vec3(0.65, 0.82, 1.0) * lightningPulse * atten;
+        }
+
+        vec3 luminance = directLight + indirectLight + lightningLight;
 
         float sigmaE = density * extinctionCoeff;
         float stepTransmittance = exp(-sigmaE * stepSize);
 
-        // Energy-conserving analytical step integration
         vec3 stepScatter = luminance * (1.0 - stepTransmittance);
         scatteredLight += transmittance * stepScatter;
 
@@ -552,7 +601,6 @@ void main() {
         transmittance *= stepTransmittance;
       }
 
-      // Integrate sub-cloud volumetric rain shafts (virga / rain curtains)
       if (rainShaft > 0.001) {
         float rainSigma = rainShaft * 0.011;
         float rainTrans = exp(-rainSigma * stepSize);
@@ -570,7 +618,6 @@ void main() {
     t += stepSize;
   }
 
-  // Debug Mode 1: Optical Transmittance T in [0..1] (coral tint marks T <= 0.012 early-out cores)
   if (debugMode == 1) {
     vec3 transVis = vec3(transmittance);
     if (transmittance <= 0.012) {
@@ -587,11 +634,9 @@ void main() {
 
   vec3 cloudColor = scatteredLight / max(alpha, 0.0001);
 
-  // Subtle contrast & silver-lining rim boost so clouds pop clearly against the sky
   float rimGlow = pow(max(cosTheta, 0.0), 6.0) * (1.0 - alpha * 0.65) * 0.45;
   cloudColor += sunRadiance * rimGlow;
 
-  // Aerial perspective blend into maritime horizon haze (reduced so clouds stay crisp)
   float avgDist = totalWeight > 0.0 ? (weightedDist / totalWeight) : tNear;
   float hazeFactor = 1.0 - exp(-max(avgDist - 260.0, 0.0) * (uSkyColorAndHaze.w * 0.52));
   vec3 horizonColor = mix(
