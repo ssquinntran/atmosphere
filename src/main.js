@@ -265,12 +265,13 @@ function syncSceneLighting() {
 }
 syncSceneLighting();
 
-// Wire up HUD presets & sliders
+// Wire up HUD presets, sliders, and 4-mode shader debug inspector
 const ctrlCoverage = document.getElementById('ctrl-coverage');
 const ctrlBase = document.getElementById('ctrl-base');
 const ctrlSun = document.getElementById('ctrl-sun');
 const ctrlWind = document.getElementById('ctrl-wind');
 const ctrlSteps = document.getElementById('ctrl-steps');
+const ctrlDebug = document.getElementById('ctrl-debug');
 
 function refreshControlReadouts() {
   ctrlCoverage.value = atmosphere.state.coverage;
@@ -278,6 +279,7 @@ function refreshControlReadouts() {
   ctrlSun.value = atmosphere.state.sunElevationDeg;
   ctrlWind.value = atmosphere.state.windSpeed;
   ctrlSteps.value = atmosphere.state.maxSteps;
+  ctrlDebug.value = String(atmosphere.state.debugMode);
 
   document.getElementById('val-coverage').textContent = `${Math.round(atmosphere.state.coverage * 100)}%`;
   document.getElementById('val-base').textContent = `${atmosphere.state.baseAltitude} m`;
@@ -320,6 +322,20 @@ ctrlWind.addEventListener('input', (e) => {
 ctrlSteps.addEventListener('input', (e) => {
   atmosphere.setEnvironment({ maxSteps: parseInt(e.target.value, 10) });
   refreshControlReadouts();
+});
+
+ctrlDebug.addEventListener('change', (e) => {
+  atmosphere.setDebugMode(parseInt(e.target.value, 10));
+  refreshControlReadouts();
+});
+
+// Number keys 1-4 switch Shader Debug View modes (0..3)
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key >= '1' && e.key <= '4') {
+    atmosphere.setDebugMode(parseInt(e.key, 10) - 1);
+    refreshControlReadouts();
+  }
 });
 
 // Full-screen quad blit for baseScene color buffer before compositing clouds
