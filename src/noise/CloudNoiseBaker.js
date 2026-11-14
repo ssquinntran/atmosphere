@@ -226,18 +226,23 @@ export class CloudNoiseBaker {
         const v = y / size;
 
         const cov =
-          0.55 * valueNoise2D(u, v, 4) +
-          0.30 * valueNoise2D(u, v, 8) +
-          0.15 * valueNoise2D(u, v, 16);
+          0.50 * valueNoise2D(u, v, 3) +
+          0.32 * valueNoise2D(u, v, 7) +
+          0.18 * valueNoise2D(u, v, 14);
+
+        // Stretch contrast of weather map so clouds have distinct, sculpted formations
+        const contrastedCov = Math.min(Math.max((cov - 0.12) * 1.32, 0.0), 1.0);
 
         const heightScale =
           0.65 * valueNoise2D(u + 0.31, v + 0.17, 3) +
           0.35 * valueNoise2D(u + 0.31, v + 0.17, 6);
 
+        const anvilMask = valueNoise2D(u + 0.63, v + 0.41, 4);
+
         const idx = (y * size + x) * 4;
-        data[idx] = Math.round(Math.min(Math.max(cov, 0), 1) * 255);
+        data[idx] = Math.round(contrastedCov * 255);
         data[idx + 1] = Math.round(Math.min(Math.max(heightScale, 0), 1) * 255);
-        data[idx + 2] = 0;
+        data[idx + 2] = Math.round(Math.min(Math.max(anvilMask, 0), 1) * 255);
         data[idx + 3] = 255;
       }
     }
