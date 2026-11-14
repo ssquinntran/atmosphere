@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { AtmosphereLayer, CLOUD_GENERA } from './layers/AtmosphereLayer.js';
+import {
+  LagrangianVortexParticleSystem,
+  analyzeTerrainTopologyUnionFind,
+} from './physics/FluidClusterPhysics.js';
 
 const canvas = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({
@@ -27,7 +31,6 @@ const camera = new THREE.PerspectiveCamera(
   1.0,
   3500.0
 );
-// Position camera looking along the flooded fjord canyon entrance toward the Saronic ASV fleet & cloud deck
 camera.position.set(-165, 64, 265);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -67,11 +70,76 @@ baseScene.add(sunLight);
 const hemiLight = new THREE.HemisphereLight(0x8ec5fc, 0x0b253a, 1.08);
 baseScene.add(hemiLight);
 
-// 1. Ocean & Flooded Canyon River Surface with RTC Cloud Shadows + Raindrop Ripple Rings
+// Shared analytical waterway centerline functions so gorges are ALWAYS flooded and boats follow them
+function getMainFjordX(z) {
+  return Math.sin(z * 0.0065) * 65.0 + Math.cos(z * 0.014) * 20.0;
+}
+
+function getCrossGorgeZ(x) {
+  return Math.cos(x * 0.0068) * 48.0 - 10.0;
+}
+
+// Extreme Maritime & Atmospheric Hydrodynamics State
+const hydroState = {
+  tornadoStrength: 0.0,   // [0..1] Rankine waterspout funnel connecting cloud base to sea surface
+  tornadoX: 0.0,
+  tornadoZ: 65.0,
+  tsunamiStrength: 0.0,   // [0..1] Soliton tsunami wave wall propagating through fjord channel
+  tsunamiZ: 280.0,
+  whirlpoolStrength: 0.0, // [0..1] Maelstrom vortex pit at central canyon junction (0, -10)
+  whirlpoolX: 0.0,
+  whirlpoolZ: -10.0,
+  waterLevel: 0.0,        // [-5m..+12m] Tidal sea level (in & out)
+};
+
+// CPU/GPU synchronized water surface elevation & normal evaluator (for ASV pitch/roll & particle buoyancy)
+function sampleWaterSurfaceHeight(x, z, elapsed) {
+  let y = hydroState.waterLevel;
+
+  // 1. Ambient Gerstner swell waves
+  y +=
+    Math.sin(x * 0.045 + elapsed * 1.9) * 0.55 +
+    Math.cos(z * 0.038 - elapsed * 1.6) * 0.45;
+
+  // 2. Tsunami soliton wave wall propagating Northward along Z
+  if (hydroState.tsunamiStrength > 0.01) {
+    const dz = z - hydroState.tsunamiZ;
+    const soliton = Math.exp(-(dz * dz) / (2.0 * 34.0 * 34.0));
+    const steepFront = 1.0 + 0.35 * Math.tanh(-dz * 0.08);
+    y += 26.0 * hydroState.tsunamiStrength * soliton * steepFront;
+  }
+
+  // 3. Whirlpool maelstrom vortex pit at canyon junction
+  if (hydroState.whirlpoolStrength > 0.01) {
+    const dx = x - hydroState.whirlpoolX;
+    const dz = z - hydroState.whirlpoolZ;
+    const r2 = dx * dx + dz * dz;
+    const pit = Math.exp(-r2 / (2.0 * 44.0 * 44.0));
+    const rimWave = Math.sin(Math.sqrt(r2) * 0.16 - elapsed * 6.5) * Math.exp(-r2 / (2.0 * 75.0 * 75.0));
+    y -= 15.5 * hydroState.whirlpoolStrength * pit;
+    y += 1.8 * hydroState.whirlpoolStrength * rimWave;
+  }
+
+  // 4. Tornado touchdown spray mound / pressure depression
+  if (hydroState.tornadoStrength > 0.01) {
+    const dx = x - hydroState.tornadoX;
+    const dz = z - hydroState.tornadoZ;
+    const r = Math.sqrt(dx * dx + dz * dz);
+    const ring = Math.exp(-Math.pow((r - 24.0) / 14.0, 2.0));
+    y += 2.6 * hydroState.tornadoStrength * ring;
+  }
+
+  return y;
+}
+
+// 1. Subdivided Vertex-Displaced Ocean Surface (Tides, Tsunami Soliton Wave, Whirlpool Vortex & Cloud Shadows)
 const sharedCloudUniforms = atmosphere.getSharedGroundUniforms();
 const uRainSplashUniform = { value: 0.0 };
+const uHydroParamsA = { value: new THREE.Vector4(0.0, 280.0, 0.0, 0.0) }; // x: tsunamiStrength, y: tsunamiZ, z: whirlpoolStrength, w: waterLevel
+const uHydroParamsB = { value: new THREE.Vector4(0.0, -10.0, 0.0, 65.0) }; // xy: whirlpoolXZ, zw: tornadoXZ
+const uTornadoStrengthUniform = { value: 0.0 };
 
-const oceanGeo = new THREE.PlaneGeometry(1400, 1400, 1, 1);
+const oceanGeo = new THREE.PlaneGeometry(1400, 1400, 180, 180);
 oceanGeo.rotateX(-Math.PI / 2);
 
 const oceanMat = new THREE.MeshStandardMaterial({
@@ -80,7 +148,6 @@ const oceanMat = new THREE.MeshStandardMaterial({
   metalness: 0.65,
 });
 
-// Inject analytical ripples + RTC-aware cloud shadow projection + raindrop splash rings onto y = 0
 oceanMat.onBeforeCompile = (shader) => {
   shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
   shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
@@ -89,16 +156,81 @@ oceanMat.onBeforeCompile = (shader) => {
   shader.uniforms.uSunDirAndElevation = sharedCloudUniforms.uSunDirAndElevation;
   shader.uniforms.uWorldOriginOffset = sharedCloudUniforms.uWorldOriginOffset;
   shader.uniforms.uRainIntensity = uRainSplashUniform;
+  shader.uniforms.uHydroA = uHydroParamsA;
+  shader.uniforms.uHydroB = uHydroParamsB;
+  shader.uniforms.uTornadoStrength = uTornadoStrengthUniform;
 
   shader.vertexShader = shader.vertexShader
     .replace(
       '#include <common>',
       `#include <common>
-      varying vec3 vOceanWorldPos;`
+      varying vec3 vOceanWorldPos;
+      varying float vFoamIntensity;
+      uniform vec4 uWindAndTime;
+      uniform vec4 uHydroA;
+      uniform vec4 uHydroB;
+      uniform float uTornadoStrength;
+
+      float evalOceanHeight(vec2 xz, float t, out float outFoam) {
+        outFoam = 0.0;
+        float h = uHydroA.w; // Tidal sea level
+
+        // Gerstner-style wind swells
+        h += sin(xz.x * 0.045 + t * 1.9) * 0.55 + cos(xz.y * 0.038 - t * 1.6) * 0.45;
+
+        // Tsunami soliton wave wall
+        float tsunamiStr = uHydroA.x;
+        if (tsunamiStr > 0.01) {
+          float dz = xz.y - uHydroA.y;
+          float soliton = exp(-(dz * dz) / (2.0 * 34.0 * 34.0));
+          float steepFront = 1.0 + 0.35 * tanh(-dz * 0.08);
+          float waveH = 26.0 * tsunamiStr * soliton * steepFront;
+          h += waveH;
+          outFoam += smoothstep(8.0, 22.0, waveH) * 0.95;
+        }
+
+        // Whirlpool maelstrom funnel pit
+        float whirlStr = uHydroA.z;
+        if (whirlStr > 0.01) {
+          vec2 dW = xz - uHydroB.xy;
+          float r2 = dot(dW, dW);
+          float r = sqrt(r2);
+          float pit = exp(-r2 / (2.0 * 44.0 * 44.0));
+          float spiralAngle = atan(dW.y, dW.x) + t * 4.8 - r * 0.14;
+          float spiralArm = sin(spiralAngle * 3.0) * 0.5 + 0.5;
+          h -= 15.5 * whirlStr * pit;
+          h += 1.8 * whirlStr * (spiralArm - 0.5) * exp(-r2 / (2.0 * 75.0 * 75.0));
+          outFoam += whirlStr * exp(-r2 / (2.0 * 65.0 * 65.0)) * (0.35 + 0.65 * spiralArm);
+        }
+
+        // Tornado waterspout spray collar on water
+        if (uTornadoStrength > 0.01) {
+          vec2 dT = xz - uHydroB.zw;
+          float rT = length(dT);
+          float sprayRing = exp(-pow((rT - 24.0) / 14.0, 2.0));
+          h += 2.6 * uTornadoStrength * sprayRing;
+          outFoam += uTornadoStrength * exp(-rT / 48.0) * 0.9;
+        }
+
+        return h;
+      }`
+    )
+    .replace(
+      '#include <beginnormal_vertex>',
+      `#include <beginnormal_vertex>
+      float tWave = uWindAndTime.z;
+      float dummyF = 0.0;
+      float hC = evalOceanHeight(position.xz, tWave, dummyF);
+      float hX = evalOceanHeight(position.xz + vec2(2.5, 0.0), tWave, dummyF);
+      float hZ = evalOceanHeight(position.xz + vec2(0.0, 2.5), tWave, dummyF);
+      objectNormal = normalize(vec3(hC - hX, 2.5, hC - hZ));`
     )
     .replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
+      float foamVal = 0.0;
+      transformed.y += evalOceanHeight(position.xz, uWindAndTime.z, foamVal);
+      vFoamIntensity = clamp(foamVal, 0.0, 1.0);
       vOceanWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
     );
 
@@ -107,6 +239,7 @@ oceanMat.onBeforeCompile = (shader) => {
       '#include <common>',
       `#include <common>
       varying vec3 vOceanWorldPos;
+      varying float vFoamIntensity;
       uniform sampler2D uWeatherMap;
       uniform vec4 uWindAndTime;
       uniform vec4 uBoundsMinAndFade;
@@ -119,7 +252,7 @@ oceanMat.onBeforeCompile = (shader) => {
         vec2 cell = floor(p);
         vec2 f = fract(p) - 0.5;
         float h = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
-        float phase = fract(t * 1.85 + h);
+        phase = fract(t * 1.85 + h);
         float rad = phase * 0.46;
         float ring = 1.0 - smoothstep(0.0, 0.055, abs(length(f) - rad));
         return ring * (1.0 - phase) * step(0.42, h);
@@ -128,7 +261,6 @@ oceanMat.onBeforeCompile = (shader) => {
     .replace(
       '#include <dithering_fragment>',
       `
-      // Project ocean point along sun ray onto cloud base plane (y = uBoundsMinAndFade.y)
       vec3 sunDir = normalize(uSunDirAndElevation.xyz);
       float tCloudPlane = max((uBoundsMinAndFade.y - vOceanWorldPos.y) / max(sunDir.y, 0.08), 0.0);
       vec2 shadowWorldXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
@@ -145,13 +277,17 @@ oceanMat.onBeforeCompile = (shader) => {
         weatherCov
       );
 
-      // Subtle procedural wave shimmer anchored to RTC world coordinates
       vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
       float wave = sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) *
                    cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
       gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * wave;
 
-      // Raindrop splash concentric ripples on water surface when raining
+      // Blend whitewater foam on tsunami crest, whirlpool spiral arms, and tornado touchdown ring
+      if (vFoamIntensity > 0.01) {
+        float foamTex = 0.65 + 0.35 * sin(globalWaveXZ.x * 0.45 + uWindAndTime.z * 3.0) * cos(globalWaveXZ.y * 0.45);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.88, 0.96, 1.0), clamp(vFoamIntensity * foamTex, 0.0, 0.92));
+      }
+
       if (uRainIntensity > 0.01) {
         float r1 = rainRingPattern(globalWaveXZ * 0.38, uWindAndTime.z);
         float r2 = rainRingPattern(globalWaveXZ * 0.52 + vec2(17.3, 9.1), uWindAndTime.z * 1.15);
@@ -159,7 +295,6 @@ oceanMat.onBeforeCompile = (shader) => {
         gl_FragColor.rgb += vec3(0.18, 0.25, 0.32) * splash;
       }
 
-      // Apply soft cloud shadow darkening on water surface
       gl_FragColor.rgb *= mix(1.0, 0.42, cloudDensityShadow * 0.82);
       #include <dithering_fragment>`
     );
@@ -168,25 +303,18 @@ oceanMat.onBeforeCompile = (shader) => {
 const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
 baseScene.add(oceanMesh);
 
-// Shared analytical waterway centerline functions so gorges are ALWAYS flooded and boats follow them exactly
-function getMainFjordX(z) {
-  return Math.sin(z * 0.0065) * 65.0 + Math.cos(z * 0.014) * 20.0;
-}
-
-function getCrossGorgeZ(x) {
-  return Math.cos(x * 0.0068) * 48.0 - 10.0;
-}
-
 // 2. Continuous Morphable Landform System + GPU Topographic Height/Flow Map (uTerrainMap)
 const terrainState = {
-  morph: 0.65,       // 0.0 = Scattered Islands, 0.5 = Fjord Canyon Range, 1.0 = Connected Alpine Massif
-  peakHeight: 245.0, // Maximum peak elevation in meters (cuts right through low & mid cloud decks)
-  canyonDepth: 0.70, // Width & wall steepness of winding central fjord & cross-gorge carving [0..1]
+  morph: 0.65,
+  peakHeight: 245.0,
+  canyonDepth: 0.70,
+  islandCount: 4,
+  waterBasinCount: 1,
 };
 
 function createMorphableTerrain() {
   const segs = 220;
-  const gridRes = segs + 1; // 221 x 221 vertices
+  const gridRes = segs + 1;
   const geo = new THREE.PlaneGeometry(1200, 1200, segs, segs);
   geo.rotateX(-Math.PI / 2);
 
@@ -195,7 +323,6 @@ function createMorphableTerrain() {
   const colors = new Float32Array(count * 3);
   const heights = new Float32Array(count);
 
-  // GPU Terrain Height & Gradient Map (R: height/380m, G: dH/dx, B: dH/dz, A: canyonFunnelMask)
   const terrainTexData = new Uint8Array(count * 4);
   const terrainMapTex = new THREE.DataTexture(
     terrainTexData,
@@ -209,14 +336,12 @@ function createMorphableTerrain() {
   terrainMapTex.magFilter = THREE.LinearFilter;
   terrainMapTex.flipY = false;
 
-  // Precompute spatial basis fields once so real-time slider morphing runs at 60 FPS
   const islandBasis = new Float32Array(count);
   const massifBasis = new Float32Array(count);
-  const riverChannelMask = new Float32Array(count); // 1.0 in core waterway, 0.0 outside
-  const canyonSlopeBasis = new Float32Array(count); // Wider canyon wall carve
+  const riverChannelMask = new Float32Array(count);
+  const canyonSlopeBasis = new Float32Array(count);
   const ridgeDetailBasis = new Float32Array(count);
 
-  // 4 quadrant islands placed cleanly outside the central North-South & East-West waterways
   const islands = [
     { x: -205, z: -165, radius: 155, weight: 1.0 },
     { x: 215, z: -160, radius: 145, weight: 0.88 },
@@ -228,7 +353,6 @@ function createMorphableTerrain() {
     const x = pos.getX(i);
     const z = pos.getZ(i);
 
-    // Multi-frequency ridge & crag noise
     const ridge =
       0.76 +
       0.16 * Math.sin(x * 0.028) * Math.cos(z * 0.028) +
@@ -236,21 +360,17 @@ function createMorphableTerrain() {
       0.05 * Math.cos(x * 0.13 - z * 0.11);
     ridgeDetailBasis[i] = ridge;
 
-    // Distance to Main North-South Fjord Waterway & East-West Cross Gorge Waterway
     const distMain = Math.abs(x - getMainFjordX(z));
     const distCross = Math.abs(z - getCrossGorgeZ(x));
     const minWaterDist = Math.min(distMain, distCross);
 
-    // Core navigable water channel (always stays underwater so boats travel through flooded gorges)
     const coreWater = 1.0 - THREE.MathUtils.smoothstep(minWaterDist, 28.0, 56.0);
     riverChannelMask[i] = coreWater;
 
-    // Wider canyon gorge walls that widen/steepen as Canyon Gorge Carve slider increases
     const mainWall = Math.exp(-Math.pow(distMain / 105.0, 2.1));
     const crossWall = Math.exp(-Math.pow(distCross / 88.0, 2.1)) * 0.88;
     canyonSlopeBasis[i] = Math.min(1.0, Math.max(mainWall, crossWall));
 
-    // A) Detached archipelago islands field [0..1]
     let islH = 0.0;
     for (const isl of islands) {
       const dx = x - isl.x;
@@ -263,11 +383,9 @@ function createMorphableTerrain() {
     }
     islandBasis[i] = islH * (1.0 - coreWater);
 
-    // B) Continuous merged mountain massif envelope divided by the flooded gorges
     const radialDist = Math.sqrt(x * x + z * z);
     const mapEnvelope = Math.max(0.0, 1.0 - Math.pow(radialDist / 540.0, 2.2));
 
-    // Twin mountain cordilleras flanking the central fjord
     const spine1Dist = Math.abs((x + 155.0) + Math.sin(z * 0.0065) * 75.0);
     const spine2Dist = Math.abs((x - 160.0) - Math.sin(z * 0.0060 + 0.8) * 75.0);
     const spine1 = Math.exp(-(spine1Dist * spine1Dist) / (2.0 * 155.0 * 155.0));
@@ -279,14 +397,12 @@ function createMorphableTerrain() {
   }
 
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.84,
     metalness: 0.06,
   });
 
-  // Project RTC-synchronized drifting cloud shadows onto mountain peaks & canyon walls
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
     shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
@@ -338,7 +454,6 @@ function createMorphableTerrain() {
           weatherCov
         );
 
-        // Fade shadow above cloud top so peaks poking above low clouds stay sunlit
         float aboveCloudFade = 1.0 - smoothstep(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, vTerrainWorldPos.y);
         gl_FragColor.rgb *= mix(1.0, 0.45, cloudShadow * aboveCloudFade * 0.78);
         #include <dithering_fragment>`
@@ -347,6 +462,7 @@ function createMorphableTerrain() {
 
   const mesh = new THREE.Mesh(geo, mat);
 
+  const colWetShoal = new THREE.Color(0x8e7f5a);
   const colSand = new THREE.Color(0xc2b280);
   const colCanyonTerrace = new THREE.Color(0x7c5844);
   const colForest = new THREE.Color(0x2d4c39);
@@ -358,6 +474,7 @@ function createMorphableTerrain() {
     const morph = terrainState.morph;
     const peakScale = terrainState.peakHeight;
     const canyonStrength = terrainState.canyonDepth;
+    const waterLvl = hydroState.waterLevel;
     const colorAttr = geo.attributes.color;
     const colorArr = colorAttr.array;
 
@@ -368,27 +485,26 @@ function createMorphableTerrain() {
       const slopeCut = canyonSlopeBasis[i];
       const ridge = ridgeDetailBasis[i];
 
-      // Smoothly bridge islands into connected mountain massif as morph goes 0 -> 1
       const combinedLand = THREE.MathUtils.lerp(isl, Math.max(isl * 0.85, massif), morph);
-
-      // Guaranteed flooded gorge waterway in the center + adjustable wider canyon wall carving
       const wallCarve = slopeCut * canyonStrength * THREE.MathUtils.smoothstep(morph, 0.05, 0.50);
       const totalCarve = Math.min(1.0, Math.max(riverCut, wallCarve * 0.92));
 
-      // Add terraced canyon cliff steps along vertical gorge walls
       const rawNormalizedH = combinedLand * (1.0 - totalCarve);
       const terraceStep = Math.sin(rawNormalizedH * 22.0) * 0.018 * wallCarve * (1.0 - riverCut);
 
-      // Force river channel floor below sea level (-9.5m) so ocean water always fills the gorges
-      const h = (rawNormalizedH + terraceStep) * peakScale - 8.0 - riverCut * 4.5;
+      // Deepen river channel floor to -14m so even at Low Tide (-5m) the gorges remain navigable waterways
+      const h = (rawNormalizedH + terraceStep) * peakScale - 9.5 - riverCut * 5.5;
       pos.setY(i, h);
-      heights[i] = Math.max(0.0, h);
+      heights[i] = h;
 
-      // Elevation & canyon-wall biome coloring (Riverbank Sand -> Forest / Canyon Slate -> Alpine Rock -> Snow Caps)
-      if (h < 3.5) {
+      // Dynamic shoreline coloring relative to current Tidal Sea Level
+      const relH = h - waterLvl;
+      if (relH < 1.5) {
+        colTemp.copy(colWetShoal);
+      } else if (relH < 5.5) {
         colTemp.copy(colSand);
       } else if (h < 88.0) {
-        const t = (h - 3.5) / 84.5;
+        const t = Math.max(0.0, (h - (waterLvl + 5.5)) / 82.5);
         const wallTint = Math.min(1.0, wallCarve * 1.6);
         colTemp.copy(colForest).lerp(colCanyonTerrace, wallTint * 0.65).lerp(colRock, t * 0.75);
       } else if (h < 185.0) {
@@ -404,7 +520,6 @@ function createMorphableTerrain() {
       colorArr[i * 3 + 2] = colTemp.b;
     }
 
-    // Populate GPU uTerrainMap with height + central-difference slope gradients + canyon funnel mask
     const cellStepM = 1200.0 / segs;
     for (let iz = 0; iz < gridRes; iz++) {
       const zPrev = Math.max(0, iz - 1);
@@ -414,11 +529,10 @@ function createMorphableTerrain() {
         const xNext = Math.min(segs, ix + 1);
         const idx = iz * gridRes + ix;
 
-        const hCenter = heights[idx];
-        const dhdx = (heights[iz * gridRes + xNext] - heights[iz * gridRes + xPrev]) / (2.0 * cellStepM);
-        const dhdz = (heights[zNext * gridRes + ix] - heights[zPrev * gridRes + ix]) / (2.0 * cellStepM);
+        const hCenter = Math.max(0.0, heights[idx]);
+        const dhdx = (Math.max(0.0, heights[iz * gridRes + xNext]) - Math.max(0.0, heights[iz * gridRes + xPrev])) / (2.0 * cellStepM);
+        const dhdz = (Math.max(0.0, heights[zNext * gridRes + ix]) - Math.max(0.0, heights[zPrev * gridRes + ix])) / (2.0 * cellStepM);
 
-        // Normalize height to [0..380m] and slope gradients to [-1.2..+1.2] -> [0..255]
         const rByte = Math.min(255, Math.max(0, Math.round((hCenter / 380.0) * 255.0)));
         const gByte = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdx / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
         const bByte = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdz / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
@@ -434,19 +548,23 @@ function createMorphableTerrain() {
     }
     terrainMapTex.needsUpdate = true;
 
+    // Run Disjoint-Set Union-Find topological connectivity scan for Emerged Islands & Flooded Waterways
+    const topo = analyzeTerrainTopologyUnionFind(heights, gridRes, waterLvl);
+    terrainState.islandCount = topo.islandCount;
+    terrainState.waterBasinCount = topo.waterBasinCount;
+
     pos.needsUpdate = true;
     colorAttr.needsUpdate = true;
     geo.computeVertexNormals();
   }
 
-  // Bilinear CPU height & gradient query for 3D wind streamlines so air ribbons wrap around mountains
   function sampleHeightAndGradient(x, z) {
     const u = THREE.MathUtils.clamp((x + 600.0) / 1200.0, 0.0, 0.999);
     const v = THREE.MathUtils.clamp((z + 600.0) / 1200.0, 0.0, 0.999);
     const ix = Math.floor(u * segs);
     const iz = Math.floor(v * segs);
     const idx = iz * gridRes + ix;
-    const h = heights[idx];
+    const h = Math.max(0.0, heights[idx]);
     const gx = (terrainTexData[idx * 4 + 1] / 255.0 - 0.5) * 2.5;
     const gz = (terrainTexData[idx * 4 + 2] / 255.0 - 0.5) * 2.5;
     const funnel = terrainTexData[idx * 4 + 3] / 255.0;
@@ -461,7 +579,11 @@ const terrain = createMorphableTerrain();
 baseScene.add(terrain.mesh);
 atmosphere.setTerrainMap(terrain.terrainMapTex);
 
-// 3. 3D Topographic Wind Streamlines (shows moving air splitting around mountain peaks, rising over ridges & funneling through gorges)
+// 3. Lagrangian Particle Physics + Spatial Hash Grid + Disjoint-Set Union-Find Coalescence System
+const fluidClusterParticles = new LagrangianVortexParticleSystem(1100);
+baseScene.add(fluidClusterParticles.points);
+
+// 4. 3D Topographic Wind Streamlines (curves around mountain peaks, spirals into tornado & funnels through gorges)
 function createAirflowStreamlines(streamCount = 260, segsPerStream = 10) {
   const totalVerts = streamCount * segsPerStream * 2;
   const positions = new Float32Array(totalVerts * 3);
@@ -505,6 +627,32 @@ function createAirflowStreamlines(streamCount = 260, segsPerStream = 10) {
   const lines = new THREE.LineSegments(geo, mat);
   lines.frustumCulled = false;
 
+  function evalFlowVelocity(x, z, baseY, baseWx, baseWz, info) {
+    let vx = baseWx * (1.0 + info.funnel * 0.45);
+    let vz = baseWz * (1.0 + info.funnel * 0.45);
+
+    if (info.h > baseY - 45.0) {
+      const blk = THREE.MathUtils.clamp((info.h - (baseY - 45.0)) / 75.0, 0.0, 1.8);
+      vx -= info.gx * 52.0 * blk;
+      vz -= info.gz * 52.0 * blk;
+    }
+
+    // Swirl streamlines into Rankine tornado vortex when active
+    if (hydroState.tornadoStrength > 0.01) {
+      const dx = x - hydroState.tornadoX;
+      const dz = z - hydroState.tornadoZ;
+      const r = Math.sqrt(dx * dx + dz * dz) + 0.1;
+      if (r < 220.0) {
+        const swirl = (1.0 - r / 220.0) * 125.0 * hydroState.tornadoStrength;
+        const inflow = (1.0 - r / 220.0) * 42.0 * hydroState.tornadoStrength;
+        vx += (-dz / r) * swirl - (dx / r) * inflow;
+        vz += (dx / r) * swirl - (dz / r) * inflow;
+      }
+    }
+
+    return { vx, vz };
+  }
+
   function update(dt, windSpeed) {
     const windAngle = THREE.MathUtils.degToRad(32);
     const baseWx = Math.cos(windAngle) * Math.max(windSpeed, 2.0) * 3.2;
@@ -517,49 +665,29 @@ function createAirflowStreamlines(streamCount = 260, segsPerStream = 10) {
     for (let i = 0; i < streamCount; i++) {
       const p = particles[i];
       const info0 = terrain.sampleHeightAndGradient(p.x, p.z);
+      const flow0 = evalFlowVelocity(p.x, p.z, p.baseY, baseWx * p.speedScale, baseWz * p.speedScale, info0);
 
-      // Deflect particle velocity around steep mountain slopes & accelerate in gorges
-      let vx = baseWx * p.speedScale * (1.0 + info0.funnel * 0.45);
-      let vz = baseWz * p.speedScale * (1.0 + info0.funnel * 0.45);
+      p.x += flow0.vx * dt;
+      p.z += flow0.vz * dt;
 
-      if (info0.h > p.baseY - 45.0) {
-        // Push air laterally around the mountain slope gradient instead of going through rock
-        const block = THREE.MathUtils.clamp((info0.h - (p.baseY - 45.0)) / 75.0, 0.0, 1.8);
-        vx -= info0.gx * 52.0 * block;
-        vz -= info0.gz * 52.0 * block;
-      }
-
-      p.x += vx * dt;
-      p.z += vz * dt;
-
-      // Wrap within [-520, 520] domain
       if (p.x > 520) p.x -= 1040;
       if (p.x < -520) p.x += 1040;
       if (p.z > 520) p.z -= 1040;
       if (p.z < -520) p.z += 1040;
 
-      // Trace streamline ribbon backward along local topographic flow field
       let curX = p.x;
       let curZ = p.z;
       const baseVertIdx = i * segsPerStream * 2;
 
       for (let s = 0; s < segsPerStream; s++) {
         const tA = terrain.sampleHeightAndGradient(curX, curZ);
-        // Orographic lift: streamline rides smoothly over terrain cushion (+16m above rock)
-        const yA = Math.max(p.baseY + tA.h * 0.35, tA.h + 16.0);
+        const yA = Math.max(p.baseY + tA.h * 0.35, Math.max(tA.h, hydroState.waterLevel) + 16.0);
+        const fStep = evalFlowVelocity(curX, curZ, p.baseY, baseWx, baseWz, tA);
 
-        let stepVx = baseWx * (1.0 + tA.funnel * 0.45);
-        let stepVz = baseWz * (1.0 + tA.funnel * 0.45);
-        if (tA.h > p.baseY - 45.0) {
-          const blk = THREE.MathUtils.clamp((tA.h - (p.baseY - 45.0)) / 75.0, 0.0, 1.8);
-          stepVx -= tA.gx * 52.0 * blk;
-          stepVz -= tA.gz * 52.0 * blk;
-        }
-
-        const nextX = curX - stepVx * 0.085;
-        const nextZ = curZ - stepVz * 0.085;
+        const nextX = curX - fStep.vx * 0.085;
+        const nextZ = curZ - fStep.vz * 0.085;
         const tB = terrain.sampleHeightAndGradient(nextX, nextZ);
-        const yB = Math.max(p.baseY + tB.h * 0.35, tB.h + 16.0);
+        const yB = Math.max(p.baseY + tB.h * 0.35, Math.max(tB.h, hydroState.waterLevel) + 16.0);
 
         const vIdx = (baseVertIdx + s * 2) * 3;
         posArr[vIdx] = curX;
@@ -570,10 +698,8 @@ function createAirflowStreamlines(streamCount = 260, segsPerStream = 10) {
         posArr[vIdx + 4] = yB;
         posArr[vIdx + 5] = nextZ;
 
-        const fadeA = 1.0 - s / segsPerStream;
-        const fadeB = 1.0 - (s + 1) / segsPerStream;
-        alphaArr[baseVertIdx + s * 2] = fadeA;
-        alphaArr[baseVertIdx + s * 2 + 1] = fadeB;
+        alphaArr[baseVertIdx + s * 2] = 1.0 - s / segsPerStream;
+        alphaArr[baseVertIdx + s * 2 + 1] = 1.0 - (s + 1) / segsPerStream;
 
         curX = nextX;
         curZ = nextZ;
@@ -590,23 +716,20 @@ function createAirflowStreamlines(streamCount = 260, segsPerStream = 10) {
 const airflowStreams = createAirflowStreamlines(260, 10);
 baseScene.add(airflowStreams.lines);
 
-// 4. Saronic Autonomous Surface Vessels (ASVs: Corsair, Cutlass, Spyglass) with Saronic Logo & Stealth Faceted Hulls
+// 5. Saronic Autonomous Surface Vessels (ASVs: Corsair, Cutlass, Spyglass) with 6-DOF Wave-Riding Physics
 function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   const c = document.createElement('canvas');
   c.width = 512;
   c.height = 128;
   const ctx = c.getContext('2d');
 
-  // Matte stealth hull background plate
   ctx.fillStyle = '#111822';
   ctx.fillRect(0, 0, c.width, c.height);
 
-  // Subtle top/bottom tactical trim line
   ctx.fillStyle = accentCss;
   ctx.fillRect(0, 0, c.width, 4);
   ctx.fillRect(0, c.height - 4, c.width, 4);
 
-  // Saronic Geometric Stealth Emblem (angular chevron/trident shield mark)
   ctx.save();
   ctx.translate(28, 22);
   ctx.fillStyle = '#ffffff';
@@ -641,13 +764,11 @@ function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   ctx.fill();
   ctx.restore();
 
-  // Bold "SARONIC" wordmark
   ctx.fillStyle = '#f8fafc';
   ctx.font = '800 44px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   ctx.letterSpacing = '4px';
   ctx.fillText('SARONIC', 124, 64);
 
-  // Vessel class & hull designation subtitle
   ctx.fillStyle = accentCss;
   ctx.font = '700 20px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.fillText(`${vesselClass} // ${hullNumber}`, 126, 96);
@@ -657,6 +778,7 @@ function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   tex.needsUpdate = true;
   return tex;
 }
+
 function createSaronicDeckEmblemTexture(accentCss) {
   const c = document.createElement('canvas');
   c.width = 256;
@@ -715,31 +837,30 @@ function createSaronicDeckEmblemTexture(accentCss) {
 function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, scale = 1.0 }) {
   const group = new THREE.Group();
 
-  // 1. Custom Faceted Stealth Wave-Piercing ASV Hull (inspired by Saronic Corsair / Cutlass)
   const hullPositions = new Float32Array([
-    0.0, 2.3, 14.5,    // 0: bow top tip
-    0.0, 0.1, 13.2,    // 1: bow waterline forefoot
+    0.0, 2.3, 14.5,
+    0.0, 0.1, 13.2,
 
-    -2.6, 2.2, 5.5,    // 2: port fwd deck edge
-     2.6, 2.2, 5.5,    // 3: stbd fwd deck edge
-    -3.1, 1.1, 5.2,    // 4: port fwd outer chine
-     3.1, 1.1, 5.2,    // 5: stbd fwd outer chine
-    -2.2, 0.0, 5.0,    // 6: port fwd waterline
-     2.2, 0.0, 5.0,    // 7: stbd fwd waterline
+    -2.6, 2.2, 5.5,
+     2.6, 2.2, 5.5,
+    -3.1, 1.1, 5.2,
+     3.1, 1.1, 5.2,
+    -2.2, 0.0, 5.0,
+     2.2, 0.0, 5.0,
 
-    -2.8, 2.1, -6.5,   // 8: port aft deck edge
-     2.8, 2.1, -6.5,   // 9: stbd aft deck edge
-    -3.4, 1.1, -6.8,   // 10: port aft outer chine
-     3.4, 1.1, -6.8,   // 11: stbd aft outer chine
-    -2.5, 0.0, -6.8,   // 12: port aft waterline
-     2.5, 0.0, -6.8,   // 13: stbd aft waterline
+    -2.8, 2.1, -6.5,
+     2.8, 2.1, -6.5,
+    -3.4, 1.1, -6.8,
+     3.4, 1.1, -6.8,
+    -2.5, 0.0, -6.8,
+     2.5, 0.0, -6.8,
 
-    -2.3, 1.9, -11.5,  // 14: port transom top
-     2.3, 1.9, -11.5,  // 15: stbd transom top
-    -2.7, 0.9, -12.0,  // 16: port transom chine
-     2.7, 0.9, -12.0,  // 17: stbd transom chine
-    -2.0, 0.0, -11.8,  // 18: port transom bottom
-     2.0, 0.0, -11.8,  // 19: stbd transom bottom
+    -2.3, 1.9, -11.5,
+     2.3, 1.9, -11.5,
+    -2.7, 0.9, -12.0,
+     2.7, 0.9, -12.0,
+    -2.0, 0.0, -11.8,
+     2.0, 0.0, -11.8,
   ]);
 
   const hullIndices = [
@@ -781,7 +902,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   const hullMesh = new THREE.Mesh(hullGeo, hullMat);
   group.add(hullMesh);
 
-  // 2. Angular Stealth Superstructure / Payload Module House
   const deckHouseGeo = new THREE.ConeGeometry(2.3, 1.6, 4);
   deckHouseGeo.rotateY(Math.PI * 0.25);
   deckHouseGeo.scale(1.0, 1.0, 2.4);
@@ -803,7 +923,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   satcom.rotation.x = -0.08;
   group.add(satcom);
 
-  // 3. Forward-Raked Integrated Stealth Sensor Mast + EO/IR Gimbal Turret
   const mastGeo = new THREE.BoxGeometry(0.75, 3.8, 1.4);
   const mast = new THREE.Mesh(mastGeo, hullMat);
   mast.position.set(0, 4.8, -1.2);
@@ -824,7 +943,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   beacon.position.set(0, 7.65, -1.55);
   group.add(beacon);
 
-  // 4. SARONIC Logo & Hull Nameplates
   const sideLogoTex = createSaronicLogoTexture(vesselClass, hullNumber, accentCss);
   const sideLogoMat = new THREE.MeshBasicMaterial({
     map: sideLogoTex,
@@ -866,7 +984,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   bannerMesh.position.set(0, 10.2, -1.5);
   group.add(bannerMesh);
 
-  // 5. High-Speed Twin Foaming V-Wake + Transom Rooster-Tail Spray
   const wakeGeo = new THREE.PlaneGeometry(16, 56);
   wakeGeo.rotateX(-Math.PI / 2);
   const wakeMat = new THREE.MeshBasicMaterial({
@@ -956,7 +1073,7 @@ const fleet = [
 ];
 fleet.forEach((v) => baseScene.add(v.group));
 
-// 5. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
+// 6. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
 function createPrecipitationSystem(dropCount = 9000) {
   const geo = new THREE.BufferGeometry();
   const positions = new Float32Array(dropCount * 6);
@@ -1043,14 +1160,14 @@ function createPrecipitationSystem(dropCount = 9000) {
 const rainSystem = createPrecipitationSystem(9000);
 baseScene.add(rainSystem.lines);
 
-// Sync scene directional light, sky colors, and rain state with AtmosphereLayer
+// Sync scene directional light, sky colors, and rain/vortex state with AtmosphereLayer
 function syncSceneLighting() {
   const sunDir = atmosphere.getSunDirection();
   sunLight.position.copy(sunDir).multiplyScalar(600);
   sunLight.color.setHex(atmosphere.state.sunColor);
 
-  const rainDampen = 1.0 - atmosphere.state.rainIntensity * 0.38;
-  sunLight.intensity = atmosphere.state.sunIntensity * 0.82 * rainDampen;
+  const stormDampen = 1.0 - Math.max(atmosphere.state.rainIntensity, hydroState.tornadoStrength * 0.8) * 0.38;
+  sunLight.intensity = atmosphere.state.sunIntensity * 0.82 * stormDampen;
 
   const skyCol = new THREE.Color(atmosphere.state.skyColor);
   baseScene.background.copy(skyCol);
@@ -1058,14 +1175,19 @@ function syncSceneLighting() {
   baseScene.fog.density = 0.00055 + atmosphere.state.rainIntensity * 0.00065;
 
   uRainSplashUniform.value = atmosphere.state.rainIntensity;
+  uTornadoStrengthUniform.value = hydroState.tornadoStrength;
   rainSystem.lines.visible = atmosphere.state.rainIntensity > 0.01;
   rainSystem.mat.uniforms.uRainIntensity.value = atmosphere.state.rainIntensity;
   rainSystem.mat.uniforms.uCloudBaseY.value = atmosphere.state.baseAltitude;
 }
 syncSceneLighting();
 
-// Wire up HUD presets, 10 WMO cloud genera selector, landform morph sliders, and 4-mode shader debug inspector
+// Wire up HUD controls
 const ctrlGenus = document.getElementById('ctrl-genus');
+const ctrlTornado = document.getElementById('ctrl-tornado');
+const ctrlTsunami = document.getElementById('ctrl-tsunami');
+const ctrlWhirlpool = document.getElementById('ctrl-whirlpool');
+const ctrlTide = document.getElementById('ctrl-tide');
 const ctrlTerrainMorph = document.getElementById('ctrl-terrain-morph');
 const ctrlPeakHeight = document.getElementById('ctrl-peak-height');
 const ctrlCanyonDepth = document.getElementById('ctrl-canyon-depth');
@@ -1081,9 +1203,9 @@ const elGenusInfo = document.getElementById('genus-info');
 const elDebugCaption = document.getElementById('debug-caption');
 
 const DEBUG_CAPTIONS = [
-  'Mode 1 (Final Composite): Full volumetric clouds with topographic airflow deflection, orographic lift over ridges, and rain.',
-  'Mode 2 (Optical Transmittance T): Shows how much background light passes through the clouds (1.0 = clear sky, 0.0 = opaque cloud core in coral).',
-  'Mode 3 (Radial Scene Depth tScene): Visualizes true 3D Euclidean distance to mountain ridges & canyons (50m contour rings) used for soft cloud-terrain occlusion.',
+  'Mode 1 (Final Composite): Full volumetric clouds, Rankine tornado funnel, vertex-displaced tsunami/whirlpool waves, and DSU particle physics.',
+  'Mode 2 (Optical Transmittance T): Shows how much background light passes through the clouds & tornado funnel (1.0 = clear sky, 0.0 = opaque core in coral).',
+  'Mode 3 (Radial Scene Depth tScene): Visualizes true 3D Euclidean distance to mountains, tsunami waves & vessels (50m contour rings).',
   'Mode 4 (3D Noise & Airflow Slice): Cross-section of 3D noise + solid mountain rock cores (amber rim) showing air streamlines splitting around peaks.',
 ];
 
@@ -1095,8 +1217,20 @@ function formatMorphLabel(m) {
   return `${pct}% (Alpine Massif)`;
 }
 
+function formatTideLabel(lvl) {
+  const sign = lvl > 0 ? '+' : '';
+  if (lvl <= -2.0) return `${sign}${lvl.toFixed(1)} m (Low Tide)`;
+  if (lvl >= 4.0) return `${sign}${lvl.toFixed(1)} m (King Tide)`;
+  if (lvl >= 1.5) return `${sign}${lvl.toFixed(1)} m (High Tide)`;
+  return `${sign}${lvl.toFixed(1)} m (Mean Tide)`;
+}
+
 function refreshControlReadouts() {
   ctrlGenus.value = atmosphere.state.cloudGenus;
+  ctrlTornado.value = hydroState.tornadoStrength;
+  ctrlTsunami.value = hydroState.tsunamiStrength;
+  ctrlWhirlpool.value = hydroState.whirlpoolStrength;
+  ctrlTide.value = hydroState.waterLevel;
   ctrlTerrainMorph.value = terrainState.morph;
   ctrlPeakHeight.value = terrainState.peakHeight;
   ctrlCanyonDepth.value = terrainState.canyonDepth;
@@ -1109,6 +1243,11 @@ function refreshControlReadouts() {
   ctrlSteps.value = atmosphere.state.maxSteps;
   ctrlDebug.value = String(atmosphere.state.debugMode);
 
+  document.getElementById('val-tornado').textContent = `${Math.round(hydroState.tornadoStrength * 100)}%`;
+  document.getElementById('val-tsunami').textContent = `${Math.round(hydroState.tsunamiStrength * 100)}%`;
+  document.getElementById('val-whirlpool').textContent = `${Math.round(hydroState.whirlpoolStrength * 100)}%`;
+  document.getElementById('val-tide').textContent = formatTideLabel(hydroState.waterLevel);
+
   document.getElementById('val-terrain-morph').textContent = formatMorphLabel(terrainState.morph);
   document.getElementById('val-peak-height').textContent = `${Math.round(terrainState.peakHeight)} m`;
   document.getElementById('val-canyon-depth').textContent = `${Math.round(terrainState.canyonDepth * 100)}%`;
@@ -1120,6 +1259,11 @@ function refreshControlReadouts() {
   document.getElementById('val-sun').textContent = `${atmosphere.state.sunElevationDeg}°`;
   document.getElementById('val-wind').textContent = `${atmosphere.state.windSpeed} m/s`;
   document.getElementById('val-steps').textContent = `${atmosphere.state.maxSteps}`;
+
+  const elTopo = document.getElementById('stat-topology');
+  if (elTopo) {
+    elTopo.textContent = `${terrainState.islandCount} Isl / ${terrainState.waterBasinCount} Sea`;
+  }
 
   const genusMeta = CLOUD_GENERA[atmosphere.state.cloudGenus];
   if (genusMeta && elGenusInfo) {
@@ -1137,6 +1281,13 @@ document.querySelectorAll('.preset-btn').forEach((btn) => {
     document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     atmosphere.applyPreset(btn.dataset.preset);
+    hydroState.tornadoStrength = atmosphere.state.tornadoStrength ?? 0.0;
+    atmosphere.setVortexAndTide(
+      hydroState.tornadoX,
+      hydroState.tornadoZ,
+      hydroState.tornadoStrength,
+      hydroState.waterLevel
+    );
     syncSceneLighting();
     refreshControlReadouts();
   });
@@ -1146,6 +1297,40 @@ ctrlGenus.addEventListener('change', (e) => {
   document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
   atmosphere.setCloudGenus(e.target.value);
   syncSceneLighting();
+  refreshControlReadouts();
+});
+
+ctrlTornado.addEventListener('input', (e) => {
+  hydroState.tornadoStrength = parseFloat(e.target.value);
+  atmosphere.setVortexAndTide(
+    hydroState.tornadoX,
+    hydroState.tornadoZ,
+    hydroState.tornadoStrength,
+    hydroState.waterLevel
+  );
+  syncSceneLighting();
+  refreshControlReadouts();
+});
+
+ctrlTsunami.addEventListener('input', (e) => {
+  hydroState.tsunamiStrength = parseFloat(e.target.value);
+  refreshControlReadouts();
+});
+
+ctrlWhirlpool.addEventListener('input', (e) => {
+  hydroState.whirlpoolStrength = parseFloat(e.target.value);
+  refreshControlReadouts();
+});
+
+ctrlTide.addEventListener('input', (e) => {
+  hydroState.waterLevel = parseFloat(e.target.value);
+  atmosphere.setVortexAndTide(
+    hydroState.tornadoX,
+    hydroState.tornadoZ,
+    hydroState.tornadoStrength,
+    hydroState.waterLevel
+  );
+  terrain.updateGeometry();
   refreshControlReadouts();
 });
 
@@ -1210,7 +1395,6 @@ ctrlDebug.addEventListener('change', (e) => {
   refreshControlReadouts();
 });
 
-// Number keys 1-4 switch Shader Debug View modes (0..3)
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key >= '1' && e.key <= '4') {
@@ -1225,7 +1409,6 @@ const blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const blitMat = new THREE.MeshBasicMaterial({ map: sceneTarget.texture, depthTest: false, depthWrite: false });
 blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
 
-// Resize handling
 window.addEventListener('resize', () => {
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -1238,7 +1421,6 @@ window.addEventListener('resize', () => {
   atmosphere.resize(drawingSize.x, drawingSize.y);
 });
 
-// Main render loop state & WebGL2 context loss/recovery lifecycle
 const startTime = performance.now();
 let lastFrameTime = startTime;
 let frameCount = 0;
@@ -1248,7 +1430,7 @@ let rafId = null;
 
 const elFps = document.getElementById('stat-fps');
 const elGpu = document.getElementById('stat-gpu');
-const elCalls = document.getElementById('stat-calls');
+const elClusters = document.getElementById('stat-clusters');
 
 canvas.addEventListener(
   'webglcontextlost',
@@ -1284,6 +1466,11 @@ canvas.addEventListener(
   false
 );
 
+const _upVec = new THREE.Vector3();
+const _fwdVec = new THREE.Vector3();
+const _rightVec = new THREE.Vector3();
+const _rotMat = new THREE.Matrix4();
+
 function animate(now) {
   if (isContextLost) return;
   rafId = requestAnimationFrame(animate);
@@ -1294,33 +1481,90 @@ function animate(now) {
 
   controls.update();
 
-  // Advance Saronic ASV fleet strictly along the flooded canyon & fjord waterways
+  // 1. Update Tornado path (patrols along the central fjord waterway) & Tsunami wave propagation
+  const tornadoZ = Math.sin(elapsed * 0.22) * 165.0 + 40.0;
+  const tornadoX = getMainFjordX(tornadoZ);
+  hydroState.tornadoX = tornadoX;
+  hydroState.tornadoZ = tornadoZ;
+
+  // Propagate Tsunami soliton wave from +380m (South fjord mouth) to -380m (North canyon)
+  hydroState.tsunamiZ = 380.0 - ((elapsed * 75.0) % 760.0);
+
+  // Sync ocean vertex shader uniforms & volumetric atmosphere vortex uniforms
+  uHydroParamsA.value.set(
+    hydroState.tsunamiStrength,
+    hydroState.tsunamiZ,
+    hydroState.whirlpoolStrength,
+    hydroState.waterLevel
+  );
+  uHydroParamsB.value.set(
+    hydroState.whirlpoolX,
+    hydroState.whirlpoolZ,
+    hydroState.tornadoX,
+    hydroState.tornadoZ
+  );
+  atmosphere.setVortexAndTide(
+    hydroState.tornadoX,
+    hydroState.tornadoZ,
+    hydroState.tornadoStrength,
+    hydroState.waterLevel
+  );
+
+  // 2. Advance Saronic ASV fleet along flooded gorges with 6-DOF wave-riding heave, pitch & roll
   for (const v of fleet) {
     const t = elapsed * v.speed + v.phase;
     const pNow = sampleFleetWaterwayPath(v.routeType, t);
     const pNext = sampleFleetWaterwayPath(v.routeType, t + 0.015);
 
-    v.group.position.set(pNow.x, 0.15, pNow.z);
-    v.group.lookAt(pNext.x, 0.15, pNext.z);
+    const hCenter = sampleWaterSurfaceHeight(pNow.x, pNow.z, elapsed);
+    const hRight = sampleWaterSurfaceHeight(pNow.x + 3.0, pNow.z, elapsed);
+    const hFwd = sampleWaterSurfaceHeight(pNow.x, pNow.z + 3.0, elapsed);
+
+    v.group.position.set(pNow.x, hCenter + 0.15, pNow.z);
+
+    // Compute wave surface normal and align vessel orientation (heading + wave pitch/roll)
+    _upVec.set(hCenter - hRight, 3.0, hCenter - hFwd).normalize();
+    _fwdVec.set(pNext.x - pNow.x, 0.0, pNext.z - pNow.z).normalize();
+    _rightVec.crossVectors(_upVec, _fwdVec).normalize();
+    _fwdVec.crossVectors(_rightVec, _upVec).normalize();
+
+    _rotMat.makeBasis(_rightVec, _upVec, _fwdVec);
+    v.group.quaternion.setFromRotationMatrix(_rotMat);
   }
 
-  // Advance 3D topographic airflow streamlines (deflecting around peaks & funneling through gorges)
+  // 3. Advance 3D Topographic Airflow Streamlines
   airflowStreams.update(dt, atmosphere.state.windSpeed);
 
-  // Update 3D rain streaks around camera
+  // 4. Advance Lagrangian Vortex/Wave Particles + Spatial Hash Grid + Disjoint-Set Union-Find Clustering
+  const windAngle = THREE.MathUtils.degToRad(32);
+  const windVecXZ = {
+    x: Math.cos(windAngle) * atmosphere.state.windSpeed,
+    y: Math.sin(windAngle) * atmosphere.state.windSpeed,
+  };
+  fluidClusterParticles.update(dt, {
+    windVecXZ,
+    tornadoStrength: hydroState.tornadoStrength,
+    tornadoCenterXZ: { x: hydroState.tornadoX, y: hydroState.tornadoZ },
+    whirlpoolStrength: hydroState.whirlpoolStrength,
+    whirlpoolCenterXZ: { x: hydroState.whirlpoolX, y: hydroState.whirlpoolZ },
+    tsunamiStrength: hydroState.tsunamiStrength,
+    tsunamiZ: hydroState.tsunamiZ,
+    waterLevel: hydroState.waterLevel,
+    cloudBaseY: atmosphere.state.baseAltitude,
+    sampleTerrain: terrain.sampleHeightAndGradient,
+    sampleWaterHeight: (x, z) => sampleWaterSurfaceHeight(x, z, elapsed),
+  });
+
+  // 5. Update 3D rain streaks around camera
   if (rainSystem.lines.visible) {
     rainSystem.mat.uniforms.uTime.value = elapsed;
     rainSystem.mat.uniforms.uCameraPos.value.copy(camera.position);
-    const windAngle = THREE.MathUtils.degToRad(32);
-    rainSystem.mat.uniforms.uWindXZ.value.set(
-      Math.cos(windAngle) * atmosphere.state.windSpeed,
-      Math.sin(windAngle) * atmosphere.state.windSpeed
-    );
+    rainSystem.mat.uniforms.uWindXZ.value.set(windVecXZ.x, windVecXZ.y);
   }
 
   atmosphere.update(elapsed, camera);
 
-  // Pass 1: Render opaque maritime scene + 3D airflow streamlines + rainfall into offscreen render target + DepthTexture
+  // Pass 1: Render opaque maritime scene + vertex-displaced ocean + DSU particles into offscreen target
   renderer.setRenderTarget(sceneTarget);
   renderer.clear();
   renderer.render(baseScene, camera);
@@ -1346,7 +1590,9 @@ function animate(now) {
       atmosphere.lastGpuPassMs !== null
         ? `${atmosphere.lastGpuPassMs.toFixed(2)} ms`
         : `${(1000 / Math.max(fps, 1)).toFixed(1)} ms (CPU)`;
-    elCalls.textContent = `${renderer.info.render.calls}`;
+    if (elClusters) {
+      elClusters.textContent = `${fluidClusterParticles.activeClusters} (Max: ${fluidClusterParticles.largestCluster})`;
+    }
     frameCount = 0;
     fpsAccumTime = 0;
   }
