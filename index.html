@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Volumetric Atmosphere Layer — WebGL2 / Three.js</title>
+  <style>
+    :root {
+      --bg-panel: rgba(11, 17, 26, 0.84);
+      --border-subtle: rgba(110, 168, 224, 0.22);
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.16);
+      --text-main: #e2e8f0;
+      --text-muted: #94a3b8;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #070d14;
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    #viewport {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .hud-header {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      backdrop-filter: blur(10px);
+      border-radius: 8px;
+      padding: 12px 16px;
+      pointer-events: none;
+      max-width: 340px;
+    }
+
+    .hud-header h1 {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .hud-header p {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    .hud-controls {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 300px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      backdrop-filter: blur(10px);
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+    }
+
+    .section-title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .preset-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+
+    button.preset-btn {
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      padding: 6px 6px;
+      border-radius: 5px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    button.preset-btn:hover {
+      border-color: var(--accent);
+    }
+
+    button.preset-btn.active {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .slider-row {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-main);
+    }
+
+    .slider-label span.val {
+      font-family: var(--mono);
+      color: var(--accent);
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      background: rgba(7, 13, 20, 0.65);
+      border: 1px solid rgba(110, 168, 224, 0.14);
+      border-radius: 6px;
+      padding: 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .metric-label {
+      color: var(--text-muted);
+      font-size: 10px;
+    }
+
+    .metric-value {
+      color: #f8fafc;
+      font-weight: 600;
+      margin-top: 1px;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      border-top: 1px solid rgba(110, 168, 224, 0.14);
+      padding-top: 8px;
+    }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+
+  <div class="hud-header">
+    <h1>Atmosphere Layer // WebGL2</h1>
+    <p>Volumetric raymarched cumulus deck with GPU slice-atlas 3D noise, radial depth occlusion, and synchronized surface cloud shadows.</p>
+  </div>
+
+  <aside class="hud-controls">
+    <div>
+      <div class="section-title">Operational Weather Presets</div>
+      <div class="preset-row">
+        <button class="preset-btn active" data-preset="tradeWinds">Trade Winds</button>
+        <button class="preset-btn" data-preset="clearPatrol">Clear Patrol</button>
+        <button class="preset-btn" data-preset="squall">Squall Front</button>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <div class="section-title">Atmosphere & Lighting</div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Cloud Coverage</span><span class="val" id="val-coverage">56%</span></div>
+        <input type="range" id="ctrl-coverage" min="0.15" max="0.95" step="0.01" value="0.56" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Cloud Base Altitude</span><span class="val" id="val-base">95 m</span></div>
+        <input type="range" id="ctrl-base" min="50" max="150" step="1" value="95" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Sun Elevation</span><span class="val" id="val-sun">28°</span></div>
+        <input type="range" id="ctrl-sun" min="4" max="75" step="1" value="28" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Wind Drift Speed</span><span class="val" id="val-wind">14 m/s</span></div>
+        <input type="range" id="ctrl-wind" min="0" max="40" step="1" value="14" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Raymarch Steps</span><span class="val" id="val-steps">36</span></div>
+        <input type="range" id="ctrl-steps" min="20" max="64" step="4" value="36" />
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">Live Frame Telemetry</div>
+      <div class="telemetry-grid">
+        <div>
+          <div class="metric-label">Frame Rate</div>
+          <div class="metric-value" id="stat-fps">-- FPS</div>
+        </div>
+        <div>
+          <div class="metric-label">Cloud GPU Pass</div>
+          <div class="metric-value" id="stat-gpu">-- ms</div>
+        </div>
+        <div>
+          <div class="metric-label">Draw Calls</div>
+          <div class="metric-value" id="stat-calls">--</div>
+        </div>
+        <div>
+          <div class="metric-label">3D Noise VRAM</div>
+          <div class="metric-value" id="stat-vram">1.26 MB</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hint">
+      <strong>Controls:</strong> Left-drag orbit · Right-drag pan · Scroll zoom into or above the cloud layer.
+    </div>
+  </aside>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
