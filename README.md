@@ -2,16 +2,25 @@
 Simulation of atmosphere layer such as clouds
 
 ├── README.md                     # Updated engineering design doc & architecture overview
+
 ├── index.html                    # Entry viewport, importmap (Three.js r187), HUD & telemetry
+
 └── src/
+
     ├── main.js                   # Renderer, offscreen depth pass, ocean/terrain/vessels, UI
+    
     ├── layers/
     │   └── AtmosphereLayer.js    # Composable volumetric cloud layer & GPU timer profiler
+    
     ├── noise/
     │   └── CloudNoiseBaker.js    # GPU slice-atlas 3D noise baker & weather/jitter textures
+    
     └── shaders/
+    
         ├── atmosphere.vert.js    # World-space ray setup & bounding slab projection
+        
         └── atmosphere.frag.js    # Ray-AABB intersect, radial depth fade, HG/Beer-Lambert march
+        
 
 # Volumetric Cloud & Atmosphere Layer (WebGL2 / Three.js)
 
