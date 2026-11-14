@@ -56,6 +56,8 @@ export class AtmosphereLayer {
       ...WEATHER_PRESETS.tradeWinds,
       maxSteps: options.maxSteps ?? 36,
       debugMode: options.debugMode ?? DEBUG_MODES.final,
+      originOffsetX: 0,
+      originOffsetZ: 0,
     };
 
     this.macroNoise = null;
@@ -76,14 +78,7 @@ export class AtmosphereLayer {
   }
 
   init(renderer, scene) {
-    this.gl = renderer.getContext();
-    this.timerExt = this.gl.getExtension('EXT_disjoint_timer_query_webgl2');
-
-    // Bake 64³ macro Perlin-Worley + 32³ Worley detail erosion textures on GPU
-    this.macroNoise = CloudNoiseBaker.bakeVolumeTexture(renderer, 64, 8, 4.0);
-    this.detailNoise = CloudNoiseBaker.bakeVolumeTexture(renderer, 32, 8, 6.0);
-    this.weatherMap = CloudNoiseBaker.createWeatherMap(256);
-    this.blueNoise = CloudNoiseBaker.createBlueNoiseJitter(64);
+    this._initGpuResources(renderer);
 
     const halfExtent = this.mapExtent * 0.5;
     const yMin = this.state.baseAltitude;
@@ -108,6 +103,9 @@ export class AtmosphereLayer {
         uCameraForwardAndNear: { value: new THREE.Vector4(0, -0.4, -0.9, 1.0) },
         uViewportAndFar: { value: new THREE.Vector4(1280, 720, 4000.0, 0.24) },
         uDebugParams: { value: new THREE.Vector4(this.state.debugMode, 0.0, 0.0, 0.0) },
+        uWorldOriginOffset: {
+          value: new THREE.Vector4(this.state.originOffsetX, this.state.originOffsetZ, 0.0, 0.0),
+        },
         uMacroNoise: { value: this.macroNoise },
         uDetailNoise: { value: this.detailNoise },
         uWeatherMap: { value: this.weatherMap },
@@ -124,6 +122,67 @@ export class AtmosphereLayer {
 
     this._syncBoundsAndLighting();
     scene.add(this.proxyMesh);
+  }
+
+  _initGpuResources(renderer) {
+    this.gl = renderer.getContext();
+    this.timerExt = this.gl.getExtension('EXT_disjoint_timer_query_webgl2');
+
+    // Bake 64³ macro Perlin-Worley + 32³ Worley detail erosion textures on GPU
+    this.macroNoise = CloudNoiseBaker.bakeVolumeTexture(renderer, 64, 8, 4.0);
+    this.detailNoise = CloudNoiseBaker.bakeVolumeTexture(renderer, 32, 8, 6.0);
+    this.weatherMap = CloudNoiseBaker.createWeatherMap(256);
+    this.blueNoise = CloudNoiseBaker.createBlueNoiseJitter(64);
+  }
+
+  /**
+   * Releases invalidated WebGL query and texture handles when the browser signals
+   * a GPU context loss event (e.g., driver reset or background tab reclamation).
+   */
+  onContextLost() {
+    this.gl = null;
+    this.timerExt = null;
+    this.pendingQueries.length = 0;
+    this.lastGpuPassMs = null;
+
+    this.macroNoise?.dispose();
+    this.detailNoise?.dispose();
+    this.weatherMap?.dispose();
+    this.blueNoise?.dispose();
+
+    this.macroNoise = null;
+    this.detailNoise = null;
+    this.weatherMap = null;
+    this.blueNoise = null;
+  }
+
+  /**
+   * Re-bakes GPU 3D noise volumes and flags the custom shader program for recompilation
+   * once WebGL2 context restoration completes.
+   */
+  onContextRestored(renderer) {
+    this._initGpuResources(renderer);
+
+    if (this.material) {
+      this.material.uniforms.uMacroNoise.value = this.macroNoise;
+      this.material.uniforms.uDetailNoise.value = this.detailNoise;
+      this.material.uniforms.uWeatherMap.value = this.weatherMap;
+      this.material.uniforms.uBlueNoise.value = this.blueNoise;
+      this.material.needsUpdate = true;
+      this._syncBoundsAndLighting();
+    }
+  }
+
+  /**
+   * Shifts Relative-To-Center (RTC) world-space coordinates (in meters) so multi-kilometer
+   * map pans stay centered near the local float32 origin without precision jitter.
+   */
+  setWorldOriginOffset(offsetX, offsetZ) {
+    this.state.originOffsetX = offsetX;
+    this.state.originOffsetZ = offsetZ;
+    if (this.material) {
+      this.material.uniforms.uWorldOriginOffset.value.set(offsetX, offsetZ, 0.0, 0.0);
+    }
   }
 
   setSceneDepthTexture(depthTexture) {
@@ -210,6 +269,12 @@ export class AtmosphereLayer {
 
     this.material.uniforms.uCameraPosAndSteps.value.w = this.state.maxSteps;
     this.material.uniforms.uDebugParams.value.x = this.state.debugMode;
+    this.material.uniforms.uWorldOriginOffset.value.set(
+      this.state.originOffsetX,
+      this.state.originOffsetZ,
+      0.0,
+      0.0
+    );
   }
 
   getSunDirection() {
@@ -227,6 +292,7 @@ export class AtmosphereLayer {
       uBoundsMinAndFade: this.material.uniforms.uBoundsMinAndFade,
       uBoundsMaxAndCoverage: this.material.uniforms.uBoundsMaxAndCoverage,
       uSunDirAndElevation: this.material.uniforms.uSunDirAndElevation,
+      uWorldOriginOffset: this.material.uniforms.uWorldOriginOffset,
     };
   }
 
@@ -258,7 +324,7 @@ export class AtmosphereLayer {
   }
 
   beginGpuTimer() {
-    if (!this.timerExt) return;
+    if (!this.timerExt || !this.gl) return;
     this._pollGpuQueries();
     if (this.pendingQueries.length < 4) {
       const query = this.gl.createQuery();
@@ -268,7 +334,7 @@ export class AtmosphereLayer {
   }
 
   endGpuTimer() {
-    if (!this.timerExt || this.pendingQueries.length === 0) return;
+    if (!this.timerExt || !this.gl || this.pendingQueries.length === 0) return;
     if (this.gl.getQuery(this.timerExt.TIME_ELAPSED_EXT, this.gl.CURRENT_QUERY)) {
       this.gl.endQuery(this.timerExt.TIME_ELAPSED_EXT);
     }
@@ -291,6 +357,7 @@ export class AtmosphereLayer {
   }
 
   dispose() {
+    this.pendingQueries.length = 0;
     this.macroNoise?.dispose();
     this.detailNoise?.dispose();
     this.weatherMap?.dispose();
