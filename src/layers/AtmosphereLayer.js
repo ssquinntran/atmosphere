@@ -217,6 +217,7 @@ export class AtmosphereLayer {
     this.detailNoise = null;
     this.weatherMap = null;
     this.blueNoise = null;
+    this.terrainMap = null;
     this.material = null;
     this.proxyMesh = null;
 
@@ -236,6 +237,19 @@ export class AtmosphereLayer {
     const halfExtent = this.mapExtent * 0.5;
     const yMin = this.state.baseAltitude;
     const yMax = yMin + this.state.slabThickness;
+
+    // Default flat terrain texture until main scene supplies live morphable terrain height/flow map
+    if (!this.terrainMap) {
+      const emptyData = new Uint8Array(4 * 4 * 4);
+      for (let i = 0; i < 16; i++) {
+        emptyData[i * 4] = 0;
+        emptyData[i * 4 + 1] = 128;
+        emptyData[i * 4 + 2] = 128;
+        emptyData[i * 4 + 3] = 0;
+      }
+      this.terrainMap = new THREE.DataTexture(emptyData, 4, 4, THREE.RGBAFormat);
+      this.terrainMap.needsUpdate = true;
+    }
 
     this.material = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -273,11 +287,12 @@ export class AtmosphereLayer {
         uDetailNoise: { value: this.detailNoise },
         uWeatherMap: { value: this.weatherMap },
         uBlueNoise: { value: this.blueNoise },
+        uTerrainMap: { value: this.terrainMap },
         uSceneDepth: { value: null },
       },
     });
 
-    // Unit cube scaled and positioned dynamically to match [yMin, yMax] (or 0..yMax with rain)
+    // Unit cube scaled and positioned dynamically to match [yMin, yMax] (plus orographic lift headroom)
     const boxGeo = new THREE.BoxGeometry(1, 1, 1);
     this.proxyMesh = new THREE.Mesh(boxGeo, this.material);
     this.proxyMesh.frustumCulled = false;
@@ -323,8 +338,16 @@ export class AtmosphereLayer {
       this.material.uniforms.uDetailNoise.value = this.detailNoise;
       this.material.uniforms.uWeatherMap.value = this.weatherMap;
       this.material.uniforms.uBlueNoise.value = this.blueNoise;
+      this.material.uniforms.uTerrainMap.value = this.terrainMap;
       this.material.needsUpdate = true;
       this._syncBoundsAndLighting();
+    }
+  }
+
+  setTerrainMap(terrainTexture) {
+    this.terrainMap = terrainTexture;
+    if (this.material) {
+      this.material.uniforms.uTerrainMap.value = terrainTexture;
     }
   }
 
@@ -401,9 +424,10 @@ export class AtmosphereLayer {
     const yMin = this.state.baseAltitude;
     const yMax = yMin + this.state.slabThickness;
 
-    // Expand proxy geometry down to y=0 when rain is active so sub-cloud virga rays run
+    // Expand proxy geometry vertically (+65m headroom for orographic lift over tall peaks, and down to y=0 for rain)
     const proxyMinY = this.state.rainIntensity > 0.01 ? 0 : yMin;
-    const proxyHeight = yMax - proxyMinY;
+    const proxyMaxY = yMax + 65.0;
+    const proxyHeight = proxyMaxY - proxyMinY;
     this.proxyMesh.scale.set(this.mapExtent, proxyHeight, this.mapExtent);
     this.proxyMesh.position.set(0, proxyMinY + proxyHeight * 0.5, 0);
 
@@ -485,6 +509,7 @@ export class AtmosphereLayer {
       uBoundsMaxAndCoverage: this.material.uniforms.uBoundsMaxAndCoverage,
       uSunDirAndElevation: this.material.uniforms.uSunDirAndElevation,
       uWorldOriginOffset: this.material.uniforms.uWorldOriginOffset,
+      uTerrainMap: this.material.uniforms.uTerrainMap,
     };
   }
 
@@ -554,6 +579,7 @@ export class AtmosphereLayer {
     this.detailNoise?.dispose();
     this.weatherMap?.dispose();
     this.blueNoise?.dispose();
+    this.terrainMap?.dispose();
     this.proxyMesh?.geometry.dispose();
     this.material?.dispose();
   }
