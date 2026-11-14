@@ -27,11 +27,11 @@ const camera = new THREE.PerspectiveCamera(
   1.0,
   3500.0
 );
-// Position camera slightly lower and tilted up toward the cloud deck so clouds are front-and-center
-camera.position.set(-220, 68, 285);
+// Position camera looking across the fjord canyon entrance up into the mountain & cloud deck
+camera.position.set(-225, 82, 295);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 108, 0);
+controls.target.set(0, 105, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.maxPolarAngle = Math.PI * 0.495;
@@ -168,71 +168,226 @@ oceanMat.onBeforeCompile = (shader) => {
 const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
 baseScene.add(oceanMesh);
 
-// 2. Coastal Archipelago Terrain (peaks rise into [95m, 225m] to verify depth occlusion)
-function buildArchipelagoTerrain() {
-  const geo = new THREE.PlaneGeometry(1200, 1200, 180, 180);
+// 2. Continuous Morphable Landform System (Islands <-> Merged Canyon Mountains <-> Alpine Massif)
+const terrainState = {
+  morph: 0.65,       // 0.0 = Scattered Islands, 0.5 = Fjord Canyon Range, 1.0 = Connected Alpine Massif
+  peakHeight: 245.0, // Maximum peak elevation in meters (cuts right through low & mid cloud decks)
+  canyonDepth: 0.70, // Depth of winding central fjord & cross-gorge carving [0..1]
+};
+
+function createMorphableTerrain() {
+  const segs = 200;
+  const geo = new THREE.PlaneGeometry(1200, 1200, segs, segs);
   geo.rotateX(-Math.PI / 2);
+
   const pos = geo.attributes.position;
-  const colors = new Float32Array(pos.count * 3);
+  const count = pos.count;
+  const colors = new Float32Array(count * 3);
+
+  // Precompute spatial basis fields once so real-time slider morphing runs at 60 FPS
+  const islandBasis = new Float32Array(count);
+  const massifBasis = new Float32Array(count);
+  const canyonCarveBasis = new Float32Array(count);
+  const ridgeDetailBasis = new Float32Array(count);
 
   const islands = [
-    { x: -120, z: -90, radius: 190, peak: 148 },
-    { x: 185, z: -150, radius: 150, peak: 118 },
-    { x: 140, z: 165, radius: 130, peak: 82 },
+    { x: -135, z: -85, radius: 185, weight: 1.0 },
+    { x: 175, z: -135, radius: 155, weight: 0.84 },
+    { x: 145, z: 155, radius: 140, weight: 0.68 },
+    { x: -165, z: 145, radius: 130, weight: 0.74 },
   ];
 
-  const colSand = new THREE.Color(0xc2b280);
-  const colForest = new THREE.Color(0x2d4c39);
-  const colRock = new THREE.Color(0x5a626a);
-  const colTemp = new THREE.Color();
-
-  for (let i = 0; i < pos.count; i++) {
+  for (let i = 0; i < count; i++) {
     const x = pos.getX(i);
     const z = pos.getZ(i);
-    let h = -8.0;
 
+    // Multi-frequency ridge & crag noise
+    const ridge =
+      0.76 +
+      0.16 * Math.sin(x * 0.028) * Math.cos(z * 0.028) +
+      0.10 * Math.sin(x * 0.065 + z * 0.055) +
+      0.05 * Math.cos(x * 0.13 - z * 0.11);
+    ridgeDetailBasis[i] = ridge;
+
+    // A) Detached archipelago islands field [0..1]
+    let islH = 0.0;
     for (const isl of islands) {
       const dx = x - isl.x;
       const dz = z - isl.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
       if (dist < isl.radius) {
         const falloff = Math.cos((dist / isl.radius) * (Math.PI * 0.5));
-        const ridge =
-          0.78 +
-          0.14 * Math.sin(x * 0.035) * Math.cos(z * 0.035) +
-          0.08 * Math.sin(x * 0.09 + z * 0.07);
-        h = Math.max(h, Math.pow(falloff, 1.65) * isl.peak * ridge - 6.0);
+        islH = Math.max(islH, Math.pow(falloff, 1.55) * isl.weight * ridge);
       }
     }
+    islandBasis[i] = islH;
 
-    pos.setY(i, h);
+    // B) Continuous merged mountain massif envelope (two parallel curved cordilleras + central plateau)
+    const radialDist = Math.sqrt(x * x + z * z);
+    const mapEnvelope = Math.max(0.0, 1.0 - Math.pow(radialDist / 530.0, 2.2));
 
-    if (h < 4.5) {
-      colTemp.copy(colSand);
-    } else if (h < 78.0) {
-      colTemp.copy(colForest).lerp(colRock, (h - 4.5) / 110.0);
-    } else {
-      colTemp.copy(colRock);
-    }
+    // Twin mountain spines running NW-SE and NE-SW that merge as morph increases
+    const spine1Dist = Math.abs((x + 125.0) + Math.sin(z * 0.0065) * 95.0);
+    const spine2Dist = Math.abs((x - 135.0) - Math.sin(z * 0.0060 + 0.8) * 90.0);
+    const spine1 = Math.exp(-(spine1Dist * spine1Dist) / (2.0 * 145.0 * 145.0));
+    const spine2 = Math.exp(-(spine2Dist * spine2Dist) / (2.0 * 145.0 * 145.0));
 
-    colors[i * 3] = colTemp.r;
-    colors[i * 3 + 1] = colTemp.g;
-    colors[i * 3 + 2] = colTemp.b;
+    // High-altitude saddle connecting the ranges
+    const saddle = Math.exp(-((x * x + z * z) / (2.0 * 280.0 * 280.0))) * 0.78;
+    const rawMassif = Math.min(1.15, Math.max(spine1, spine2) * 0.95 + saddle * 0.55);
+    massifBasis[i] = rawMassif * mapEnvelope * ridge;
+
+    // C) Winding main fjord canyon + tributary side gorge (carves steep canyon walls)
+    const mainMeander = Math.sin(z * 0.0075) * 68.0 + Math.cos(z * 0.016) * 24.0;
+    const distMainCanyon = Math.abs(x - mainMeander);
+
+    // Side gorge branching East-West so wind & clouds have intersecting canyon corridors
+    const sideMeander = Math.cos(x * 0.008) * 52.0 - 15.0;
+    const distSideGorge = Math.abs(z - sideMeander);
+
+    // Steep V/U-shaped canyon wall profile
+    const canyonWidth = 68.0;
+    const sideWidth = 48.0;
+    const mainCut = Math.exp(-Math.pow(distMainCanyon / canyonWidth, 2.4));
+    const sideCut = Math.exp(-Math.pow(distSideGorge / sideWidth, 2.2)) * 0.78;
+
+    canyonCarveBasis[i] = Math.min(1.0, Math.max(mainCut, sideCut));
   }
 
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
 
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.88,
-    metalness: 0.05,
+    roughness: 0.84,
+    metalness: 0.06,
   });
 
-  return new THREE.Mesh(geo, mat);
+  // Project RTC-synchronized drifting cloud shadows onto mountain peaks & canyon walls
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
+    shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
+    shader.uniforms.uBoundsMinAndFade = sharedCloudUniforms.uBoundsMinAndFade;
+    shader.uniforms.uBoundsMaxAndCoverage = sharedCloudUniforms.uBoundsMaxAndCoverage;
+    shader.uniforms.uSunDirAndElevation = sharedCloudUniforms.uSunDirAndElevation;
+    shader.uniforms.uWorldOriginOffset = sharedCloudUniforms.uWorldOriginOffset;
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vTerrainWorldPos;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vTerrainWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vTerrainWorldPos;
+        uniform sampler2D uWeatherMap;
+        uniform vec4 uWindAndTime;
+        uniform vec4 uBoundsMinAndFade;
+        uniform vec4 uBoundsMaxAndCoverage;
+        uniform vec4 uSunDirAndElevation;
+        uniform vec4 uWorldOriginOffset;`
+      )
+      .replace(
+        '#include <dithering_fragment>',
+        `
+        vec3 sunDir = normalize(uSunDirAndElevation.xyz);
+        float tCloudPlane = max((uBoundsMinAndFade.y - vTerrainWorldPos.y) / max(sunDir.y, 0.08), 0.0);
+        vec2 shadowWorldXZ = vTerrainWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
+
+        vec2 boxMinXZ = uBoundsMinAndFade.xz;
+        vec2 boxSizeXZ = uBoundsMaxAndCoverage.xz - boxMinXZ;
+        vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
+        vec2 weatherUV = (shadowWorldXZ - boxMinXZ) / boxSizeXZ + windOffset * 0.00085;
+
+        float weatherCov = texture2D(uWeatherMap, weatherUV).r;
+        float cloudShadow = smoothstep(
+          1.0 - uBoundsMaxAndCoverage.w * 1.35,
+          1.0,
+          weatherCov
+        );
+
+        // Fade shadow above cloud top so peaks poking above low clouds stay sunlit
+        float aboveCloudFade = 1.0 - smoothstep(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, vTerrainWorldPos.y);
+        gl_FragColor.rgb *= mix(1.0, 0.45, cloudShadow * aboveCloudFade * 0.78);
+        #include <dithering_fragment>`
+      );
+  };
+
+  const mesh = new THREE.Mesh(geo, mat);
+
+  const colSand = new THREE.Color(0xc2b280);
+  const colCanyonTerrace = new THREE.Color(0x7c5844);
+  const colForest = new THREE.Color(0x2d4c39);
+  const colRock = new THREE.Color(0x56606b);
+  const colSnow = new THREE.Color(0xeef4f8);
+  const colTemp = new THREE.Color();
+
+  function updateGeometry() {
+    const morph = terrainState.morph;
+    const peakScale = terrainState.peakHeight;
+    const canyonStrength = terrainState.canyonDepth;
+    const colorAttr = geo.attributes.color;
+    const colorArr = colorAttr.array;
+
+    for (let i = 0; i < count; i++) {
+      const isl = islandBasis[i];
+      const massif = massifBasis[i];
+      const cut = canyonCarveBasis[i];
+      const ridge = ridgeDetailBasis[i];
+
+      // Smoothly bridge islands into connected mountain massif as morph goes 0 -> 1
+      const combinedLand = THREE.MathUtils.lerp(isl, Math.max(isl * 0.85, massif), morph);
+
+      // Carve deep steep-walled canyons through the merged massif (strongest when morph > 0.15)
+      const activeCanyonCut = cut * canyonStrength * THREE.MathUtils.smoothstep(morph, 0.05, 0.55);
+
+      // Add terraced canyon cliff steps along vertical walls
+      const rawNormalizedH = combinedLand * (1.0 - activeCanyonCut * 0.92);
+      const terraceStep = Math.sin(rawNormalizedH * 22.0) * 0.018 * activeCanyonCut;
+
+      const h = (rawNormalizedH + terraceStep) * peakScale - 8.0;
+      pos.setY(i, h);
+
+      // Elevation & canyon-wall biome coloring (Beach -> Forest / Canyon Red-Slate -> Alpine Rock -> Snow Caps)
+      if (h < 4.5) {
+        colTemp.copy(colSand);
+      } else if (h < 88.0) {
+        const t = (h - 4.5) / 83.5;
+        // Blend warm canyon terracotta/slate into canyon walls when carved
+        const wallTint = Math.min(1.0, activeCanyonCut * 1.6);
+        colTemp.copy(colForest).lerp(colCanyonTerrace, wallTint * 0.65).lerp(colRock, t * 0.75);
+      } else if (h < 185.0) {
+        const t = (h - 88.0) / 97.0;
+        colTemp.copy(colRock).lerp(colCanyonTerrace, activeCanyonCut * 0.35 * (1.0 - t));
+      } else {
+        const snowFactor = Math.min(1.0, (h - 185.0) / 55.0 + (ridge - 0.75) * 0.6);
+        colTemp.copy(colRock).lerp(colSnow, Math.max(0.0, snowFactor));
+      }
+
+      colorArr[i * 3] = colTemp.r;
+      colorArr[i * 3 + 1] = colTemp.g;
+      colorArr[i * 3 + 2] = colTemp.b;
+    }
+
+    pos.needsUpdate = true;
+    colorAttr.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+
+  updateGeometry();
+  return { mesh, updateGeometry };
 }
 
-baseScene.add(buildArchipelagoTerrain());
+const terrain = createMorphableTerrain();
+baseScene.add(terrain.mesh);
 
 // 3. Autonomous Surface Vessel (USV) Fleet Markers
 function createVesselMesh(accentHex) {
@@ -273,12 +428,11 @@ function createVesselMesh(accentHex) {
 }
 
 const fleet = [
-  { mesh: createVesselMesh(0x38bdf8), cx: 20, cz: 30, rx: 140, rz: 95, speed: 0.11, phase: 0.0 },
-  { mesh: createVesselMesh(0x38bdf8), cx: 35, cz: 45, rx: 155, rz: 110, speed: 0.11, phase: 0.45 },
-  { mesh: createVesselMesh(0x34d399), cx: -40, cz: 140, rx: 120, rz: 70, speed: -0.09, phase: 1.8 },
+  { mesh: createVesselMesh(0x38bdf8), cx: 0, cz: 215, rx: 165, rz: 65, speed: 0.11, phase: 0.0 },
+  { mesh: createVesselMesh(0x38bdf8), cx: 0, cz: -215, rx: 165, rz: 65, speed: 0.10, phase: 1.4 },
+  { mesh: createVesselMesh(0x34d399), cx: -10, cz: 0, rx: 22, rz: 240, speed: 0.08, phase: 0.6 },
 ];
 fleet.forEach((v) => baseScene.add(v.mesh));
-
 // 4. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
 function createPrecipitationSystem(dropCount = 9000) {
   const geo = new THREE.BufferGeometry();
@@ -389,8 +543,11 @@ function syncSceneLighting() {
 }
 syncSceneLighting();
 
-// Wire up HUD presets, 10 WMO cloud genera selector, sliders, and 4-mode shader debug inspector
+// Wire up HUD presets, 10 WMO cloud genera selector, landform morph sliders, and 4-mode shader debug inspector
 const ctrlGenus = document.getElementById('ctrl-genus');
+const ctrlTerrainMorph = document.getElementById('ctrl-terrain-morph');
+const ctrlPeakHeight = document.getElementById('ctrl-peak-height');
+const ctrlCanyonDepth = document.getElementById('ctrl-canyon-depth');
 const ctrlCoverage = document.getElementById('ctrl-coverage');
 const ctrlDensity = document.getElementById('ctrl-density');
 const ctrlRain = document.getElementById('ctrl-rain');
@@ -405,12 +562,23 @@ const elDebugCaption = document.getElementById('debug-caption');
 const DEBUG_CAPTIONS = [
   'Mode 1 (Final Composite): Full physically-based volumetric clouds with sunlight scattering, self-shadowing, and rain.',
   'Mode 2 (Optical Transmittance T): Shows how much background light passes through the clouds (1.0 = clear sky, 0.0 = opaque cloud core in coral).',
-  'Mode 3 (Radial Scene Depth tScene): Visualizes true 3D Euclidean distance to terrain & ocean (50m contour rings) used for soft cloud-terrain occlusion.',
+  'Mode 3 (Radial Scene Depth tScene): Visualizes true 3D Euclidean distance to mountain ridges & canyons (50m contour rings) used for soft cloud-terrain occlusion.',
   'Mode 4 (3D Noise Slice RGB): Cross-section of the GPU-baked 3D noise textures (Red = Perlin-Worley base, Green = Worley lobes, Blue = high-freq detail, Cyan = active cloud boundary).',
 ];
 
+function formatMorphLabel(m) {
+  const pct = Math.round(m * 100);
+  if (m < 0.22) return `${pct}% (Islands)`;
+  if (m < 0.52) return `${pct}% (Channel Ridges)`;
+  if (m < 0.82) return `${pct}% (Fjord Canyon)`;
+  return `${pct}% (Alpine Massif)`;
+}
+
 function refreshControlReadouts() {
   ctrlGenus.value = atmosphere.state.cloudGenus;
+  ctrlTerrainMorph.value = terrainState.morph;
+  ctrlPeakHeight.value = terrainState.peakHeight;
+  ctrlCanyonDepth.value = terrainState.canyonDepth;
   ctrlCoverage.value = atmosphere.state.coverage;
   ctrlDensity.value = atmosphere.state.densityMultiplier;
   ctrlRain.value = atmosphere.state.rainIntensity;
@@ -419,6 +587,10 @@ function refreshControlReadouts() {
   ctrlWind.value = atmosphere.state.windSpeed;
   ctrlSteps.value = atmosphere.state.maxSteps;
   ctrlDebug.value = String(atmosphere.state.debugMode);
+
+  document.getElementById('val-terrain-morph').textContent = formatMorphLabel(terrainState.morph);
+  document.getElementById('val-peak-height').textContent = `${Math.round(terrainState.peakHeight)} m`;
+  document.getElementById('val-canyon-depth').textContent = `${Math.round(terrainState.canyonDepth * 100)}%`;
 
   document.getElementById('val-coverage').textContent = `${Math.round(atmosphere.state.coverage * 100)}%`;
   document.getElementById('val-density').textContent = `${atmosphere.state.densityMultiplier.toFixed(2)}×`;
@@ -453,6 +625,24 @@ ctrlGenus.addEventListener('change', (e) => {
   document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
   atmosphere.setCloudGenus(e.target.value);
   syncSceneLighting();
+  refreshControlReadouts();
+});
+
+ctrlTerrainMorph.addEventListener('input', (e) => {
+  terrainState.morph = parseFloat(e.target.value);
+  terrain.updateGeometry();
+  refreshControlReadouts();
+});
+
+ctrlPeakHeight.addEventListener('input', (e) => {
+  terrainState.peakHeight = parseFloat(e.target.value);
+  terrain.updateGeometry();
+  refreshControlReadouts();
+});
+
+ctrlCanyonDepth.addEventListener('input', (e) => {
+  terrainState.canyonDepth = parseFloat(e.target.value);
+  terrain.updateGeometry();
   refreshControlReadouts();
 });
 
@@ -583,7 +773,7 @@ function animate(now) {
 
   controls.update();
 
-  // Advance patrolling USV fleet along elliptical channel tracks
+  // Advance patrolling USV fleet along channel tracks (including through the central fjord canyon)
   for (const v of fleet) {
     const angle = elapsed * v.speed + v.phase;
     const nextAngle = angle + (v.speed >= 0 ? 0.02 : -0.02);
