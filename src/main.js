@@ -177,7 +177,7 @@ function getCrossGorgeZ(x) {
   return Math.cos(x * 0.0068) * 48.0 - 10.0;
 }
 
-// 2. Continuous Morphable Landform System with Flooded Gorge Waterways
+// 2. Continuous Morphable Landform System + GPU Topographic Height/Flow Map (uTerrainMap)
 const terrainState = {
   morph: 0.65,       // 0.0 = Scattered Islands, 0.5 = Fjord Canyon Range, 1.0 = Connected Alpine Massif
   peakHeight: 245.0, // Maximum peak elevation in meters (cuts right through low & mid cloud decks)
@@ -186,12 +186,28 @@ const terrainState = {
 
 function createMorphableTerrain() {
   const segs = 220;
+  const gridRes = segs + 1; // 221 x 221 vertices
   const geo = new THREE.PlaneGeometry(1200, 1200, segs, segs);
   geo.rotateX(-Math.PI / 2);
 
   const pos = geo.attributes.position;
   const count = pos.count;
   const colors = new Float32Array(count * 3);
+  const heights = new Float32Array(count);
+
+  // GPU Terrain Height & Gradient Map (R: height/380m, G: dH/dx, B: dH/dz, A: canyonFunnelMask)
+  const terrainTexData = new Uint8Array(count * 4);
+  const terrainMapTex = new THREE.DataTexture(
+    terrainTexData,
+    gridRes,
+    gridRes,
+    THREE.RGBAFormat
+  );
+  terrainMapTex.wrapS = THREE.ClampToEdgeWrapping;
+  terrainMapTex.wrapT = THREE.ClampToEdgeWrapping;
+  terrainMapTex.minFilter = THREE.LinearFilter;
+  terrainMapTex.magFilter = THREE.LinearFilter;
+  terrainMapTex.flipY = false;
 
   // Precompute spatial basis fields once so real-time slider morphing runs at 60 FPS
   const islandBasis = new Float32Array(count);
@@ -366,6 +382,7 @@ function createMorphableTerrain() {
       // Force river channel floor below sea level (-9.5m) so ocean water always fills the gorges
       const h = (rawNormalizedH + terraceStep) * peakScale - 8.0 - riverCut * 4.5;
       pos.setY(i, h);
+      heights[i] = Math.max(0.0, h);
 
       // Elevation & canyon-wall biome coloring (Riverbank Sand -> Forest / Canyon Slate -> Alpine Rock -> Snow Caps)
       if (h < 3.5) {
@@ -387,18 +404,193 @@ function createMorphableTerrain() {
       colorArr[i * 3 + 2] = colTemp.b;
     }
 
+    // Populate GPU uTerrainMap with height + central-difference slope gradients + canyon funnel mask
+    const cellStepM = 1200.0 / segs;
+    for (let iz = 0; iz < gridRes; iz++) {
+      const zPrev = Math.max(0, iz - 1);
+      const zNext = Math.min(segs, iz + 1);
+      for (let ix = 0; ix < gridRes; ix++) {
+        const xPrev = Math.max(0, ix - 1);
+        const xNext = Math.min(segs, ix + 1);
+        const idx = iz * gridRes + ix;
+
+        const hCenter = heights[idx];
+        const dhdx = (heights[iz * gridRes + xNext] - heights[iz * gridRes + xPrev]) / (2.0 * cellStepM);
+        const dhdz = (heights[zNext * gridRes + ix] - heights[zPrev * gridRes + ix]) / (2.0 * cellStepM);
+
+        // Normalize height to [0..380m] and slope gradients to [-1.2..+1.2] -> [0..255]
+        const rByte = Math.min(255, Math.max(0, Math.round((hCenter / 380.0) * 255.0)));
+        const gByte = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdx / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
+        const bByte = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdz / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
+        const funnel = Math.max(riverChannelMask[idx], canyonSlopeBasis[idx] * 0.65);
+        const aByte = Math.min(255, Math.max(0, Math.round(funnel * 255.0)));
+
+        const idx4 = idx * 4;
+        terrainTexData[idx4] = rByte;
+        terrainTexData[idx4 + 1] = gByte;
+        terrainTexData[idx4 + 2] = bByte;
+        terrainTexData[idx4 + 3] = aByte;
+      }
+    }
+    terrainMapTex.needsUpdate = true;
+
     pos.needsUpdate = true;
     colorAttr.needsUpdate = true;
     geo.computeVertexNormals();
   }
 
+  // Bilinear CPU height & gradient query for 3D wind streamlines so air ribbons wrap around mountains
+  function sampleHeightAndGradient(x, z) {
+    const u = THREE.MathUtils.clamp((x + 600.0) / 1200.0, 0.0, 0.999);
+    const v = THREE.MathUtils.clamp((z + 600.0) / 1200.0, 0.0, 0.999);
+    const ix = Math.floor(u * segs);
+    const iz = Math.floor(v * segs);
+    const idx = iz * gridRes + ix;
+    const h = heights[idx];
+    const gx = (terrainTexData[idx * 4 + 1] / 255.0 - 0.5) * 2.5;
+    const gz = (terrainTexData[idx * 4 + 2] / 255.0 - 0.5) * 2.5;
+    const funnel = terrainTexData[idx * 4 + 3] / 255.0;
+    return { h, gx, gz, funnel };
+  }
+
   updateGeometry();
-  return { mesh, updateGeometry };
+  return { mesh, terrainMapTex, updateGeometry, sampleHeightAndGradient };
 }
 
 const terrain = createMorphableTerrain();
 baseScene.add(terrain.mesh);
-// 3. Saronic Autonomous Surface Vessels (ASVs: Corsair, Cutlass, Spyglass) with Saronic Logo & Stealth Faceted Hulls
+atmosphere.setTerrainMap(terrain.terrainMapTex);
+
+// 3. 3D Topographic Wind Streamlines (shows moving air splitting around mountain peaks, rising over ridges & funneling through gorges)
+function createAirflowStreamlines(streamCount = 260, segsPerStream = 10) {
+  const totalVerts = streamCount * segsPerStream * 2;
+  const positions = new Float32Array(totalVerts * 3);
+  const alphas = new Float32Array(totalVerts);
+
+  const particles = [];
+  for (let i = 0; i < streamCount; i++) {
+    particles.push({
+      x: (Math.random() - 0.5) * 980,
+      baseY: 38 + Math.random() * 145,
+      z: (Math.random() - 0.5) * 980,
+      speedScale: 0.85 + Math.random() * 0.35,
+    });
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    vertexShader: /* glsl */ `
+      attribute float aAlpha;
+      varying float vAlpha;
+      void main() {
+        vAlpha = aAlpha;
+        gl_Position = projectionMatrix * viewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vAlpha;
+      void main() {
+        if (vAlpha <= 0.005) discard;
+        gl_FragColor = vec4(0.84, 0.95, 1.0, vAlpha * 0.32);
+      }
+    `,
+  });
+
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.frustumCulled = false;
+
+  function update(dt, windSpeed) {
+    const windAngle = THREE.MathUtils.degToRad(32);
+    const baseWx = Math.cos(windAngle) * Math.max(windSpeed, 2.0) * 3.2;
+    const baseWz = Math.sin(windAngle) * Math.max(windSpeed, 2.0) * 3.2;
+    const posAttr = geo.attributes.position;
+    const alphaAttr = geo.attributes.aAlpha;
+    const posArr = posAttr.array;
+    const alphaArr = alphaAttr.array;
+
+    for (let i = 0; i < streamCount; i++) {
+      const p = particles[i];
+      const info0 = terrain.sampleHeightAndGradient(p.x, p.z);
+
+      // Deflect particle velocity around steep mountain slopes & accelerate in gorges
+      let vx = baseWx * p.speedScale * (1.0 + info0.funnel * 0.45);
+      let vz = baseWz * p.speedScale * (1.0 + info0.funnel * 0.45);
+
+      if (info0.h > p.baseY - 45.0) {
+        // Push air laterally around the mountain slope gradient instead of going through rock
+        const block = THREE.MathUtils.clamp((info0.h - (p.baseY - 45.0)) / 75.0, 0.0, 1.8);
+        vx -= info0.gx * 52.0 * block;
+        vz -= info0.gz * 52.0 * block;
+      }
+
+      p.x += vx * dt;
+      p.z += vz * dt;
+
+      // Wrap within [-520, 520] domain
+      if (p.x > 520) p.x -= 1040;
+      if (p.x < -520) p.x += 1040;
+      if (p.z > 520) p.z -= 1040;
+      if (p.z < -520) p.z += 1040;
+
+      // Trace streamline ribbon backward along local topographic flow field
+      let curX = p.x;
+      let curZ = p.z;
+      const baseVertIdx = i * segsPerStream * 2;
+
+      for (let s = 0; s < segsPerStream; s++) {
+        const tA = terrain.sampleHeightAndGradient(curX, curZ);
+        // Orographic lift: streamline rides smoothly over terrain cushion (+16m above rock)
+        const yA = Math.max(p.baseY + tA.h * 0.35, tA.h + 16.0);
+
+        let stepVx = baseWx * (1.0 + tA.funnel * 0.45);
+        let stepVz = baseWz * (1.0 + tA.funnel * 0.45);
+        if (tA.h > p.baseY - 45.0) {
+          const blk = THREE.MathUtils.clamp((tA.h - (p.baseY - 45.0)) / 75.0, 0.0, 1.8);
+          stepVx -= tA.gx * 52.0 * blk;
+          stepVz -= tA.gz * 52.0 * blk;
+        }
+
+        const nextX = curX - stepVx * 0.085;
+        const nextZ = curZ - stepVz * 0.085;
+        const tB = terrain.sampleHeightAndGradient(nextX, nextZ);
+        const yB = Math.max(p.baseY + tB.h * 0.35, tB.h + 16.0);
+
+        const vIdx = (baseVertIdx + s * 2) * 3;
+        posArr[vIdx] = curX;
+        posArr[vIdx + 1] = yA;
+        posArr[vIdx + 2] = curZ;
+
+        posArr[vIdx + 3] = nextX;
+        posArr[vIdx + 4] = yB;
+        posArr[vIdx + 5] = nextZ;
+
+        const fadeA = 1.0 - s / segsPerStream;
+        const fadeB = 1.0 - (s + 1) / segsPerStream;
+        alphaArr[baseVertIdx + s * 2] = fadeA;
+        alphaArr[baseVertIdx + s * 2 + 1] = fadeB;
+
+        curX = nextX;
+        curZ = nextZ;
+      }
+    }
+
+    posAttr.needsUpdate = true;
+    alphaAttr.needsUpdate = true;
+  }
+
+  return { lines, update };
+}
+
+const airflowStreams = createAirflowStreamlines(260, 10);
+baseScene.add(airflowStreams.lines);
+
+// 4. Saronic Autonomous Surface Vessels (ASVs: Corsair, Cutlass, Spyglass) with Saronic Logo & Stealth Faceted Hulls
 function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   const c = document.createElement('canvas');
   c.width = 512;
@@ -419,7 +611,6 @@ function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   ctx.translate(28, 22);
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  // Outer stealth angular delta wing
   ctx.moveTo(42, 4);
   ctx.lineTo(80, 26);
   ctx.lineTo(66, 76);
@@ -429,7 +620,6 @@ function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   ctx.closePath();
   ctx.fill();
 
-  // Inner cutout & spearhead
   ctx.fillStyle = '#111822';
   ctx.beginPath();
   ctx.moveTo(42, 18);
@@ -467,7 +657,6 @@ function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   tex.needsUpdate = true;
   return tex;
 }
-
 function createSaronicDeckEmblemTexture(accentCss) {
   const c = document.createElement('canvas');
   c.width = 256;
@@ -477,12 +666,10 @@ function createSaronicDeckEmblemTexture(accentCss) {
   ctx.fillStyle = '#151e2b';
   ctx.fillRect(0, 0, 256, 256);
 
-  // Octagonal stealth helideck/payload markings
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
   ctx.lineWidth = 4;
   ctx.strokeRect(14, 14, 228, 228);
 
-  // Geometric Saronic Delta Emblem centered on foredeck
   ctx.fillStyle = '#f8fafc';
   ctx.beginPath();
   ctx.moveTo(128, 36);
@@ -529,13 +716,10 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   const group = new THREE.Group();
 
   // 1. Custom Faceted Stealth Wave-Piercing ASV Hull (inspired by Saronic Corsair / Cutlass)
-  // Coordinates: +Z is forward bow, -Z is aft transom
   const hullPositions = new Float32Array([
-    //Sharp wave-piercing bow tip (+Z)
     0.0, 2.3, 14.5,    // 0: bow top tip
     0.0, 0.1, 13.2,    // 1: bow waterline forefoot
 
-    // Forward chine shoulders
     -2.6, 2.2, 5.5,    // 2: port fwd deck edge
      2.6, 2.2, 5.5,    // 3: stbd fwd deck edge
     -3.1, 1.1, 5.2,    // 4: port fwd outer chine
@@ -543,7 +727,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
     -2.2, 0.0, 5.0,    // 6: port fwd waterline
      2.2, 0.0, 5.0,    // 7: stbd fwd waterline
 
-    // Mid-aft wide stealth faceted body
     -2.8, 2.1, -6.5,   // 8: port aft deck edge
      2.8, 2.1, -6.5,   // 9: stbd aft deck edge
     -3.4, 1.1, -6.8,   // 10: port aft outer chine
@@ -551,7 +734,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
     -2.5, 0.0, -6.8,   // 12: port aft waterline
      2.5, 0.0, -6.8,   // 13: stbd aft waterline
 
-    // Angled stealth transom stern (-Z)
     -2.3, 1.9, -11.5,  // 14: port transom top
      2.3, 1.9, -11.5,  // 15: stbd transom top
     -2.7, 0.9, -12.0,  // 16: port transom chine
@@ -561,32 +743,26 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   ]);
 
   const hullIndices = [
-    // Foredeck & main deck top
     0, 2, 3,
     2, 8, 9,  2, 9, 3,
     8, 14, 15, 8, 15, 9,
 
-    // Port upper tumblehome facet (inward-sloping stealth side)
     0, 4, 2,
     2, 4, 10, 2, 10, 8,
     8, 10, 16, 8, 16, 14,
 
-    // Starboard upper tumblehome facet
     0, 3, 5,
     3, 11, 5, 3, 9, 11,
     9, 15, 17, 9, 17, 11,
 
-    // Port lower hull chine facet
     1, 6, 4,  0, 1, 4,
     4, 6, 12, 4, 12, 10,
     10, 12, 18, 10, 18, 16,
 
-    // Starboard lower hull chine facet
     1, 5, 7,  0, 5, 1,
     5, 11, 13, 5, 13, 7,
     11, 17, 19, 11, 19, 13,
 
-    // Stern transom
     14, 16, 17, 14, 17, 15,
     16, 18, 19, 16, 19, 17,
   ];
@@ -619,7 +795,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   deckHouse.position.set(0, 2.7, 0.2);
   group.add(deckHouse);
 
-  // Phased-array SATCOM / Starlink flat panel on deckhouse roof
   const satcom = new THREE.Mesh(
     new THREE.BoxGeometry(1.6, 0.16, 2.2),
     new THREE.MeshStandardMaterial({ color: 0xdbeafe, roughness: 0.2, metalness: 0.5 })
@@ -635,7 +810,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   mast.rotation.x = -0.18;
   group.add(mast);
 
-  // EO/IR optical sensor ball turret
   const eoirTurret = new THREE.Mesh(
     new THREE.SphereGeometry(0.62, 14, 14),
     new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.18, metalness: 0.85 })
@@ -643,7 +817,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   eoirTurret.position.set(0, 6.85, -1.55);
   group.add(eoirTurret);
 
-  // Navigation & autonomy status beacon
   const beacon = new THREE.Mesh(
     new THREE.SphereGeometry(0.38, 10, 10),
     new THREE.MeshBasicMaterial({ color: accentHex })
@@ -651,7 +824,7 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   beacon.position.set(0, 7.65, -1.55);
   group.add(beacon);
 
-  // 4. SARONIC Logo & Hull Nameplates on Port Side, Starboard Side, Foredeck & Overhead Callsign Banner
+  // 4. SARONIC Logo & Hull Nameplates
   const sideLogoTex = createSaronicLogoTexture(vesselClass, hullNumber, accentCss);
   const sideLogoMat = new THREE.MeshBasicMaterial({
     map: sideLogoTex,
@@ -659,7 +832,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   });
   const sidePlaneGeo = new THREE.PlaneGeometry(9.6, 2.2);
 
-  // Starboard hull side logo plate
   const stbdLogo = new THREE.Mesh(sidePlaneGeo, sideLogoMat);
   stbdLogo.position.set(3.05, 1.55, -0.6);
   stbdLogo.rotation.y = Math.PI * 0.5;
@@ -667,14 +839,12 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   stbdLogo.rotation.x = -0.22;
   group.add(stbdLogo);
 
-  // Port hull side logo plate
   const portLogo = new THREE.Mesh(sidePlaneGeo, sideLogoMat);
   portLogo.position.set(-3.05, 1.55, -0.6);
   portLogo.rotation.y = -Math.PI * 0.5;
   portLogo.rotation.x = 0.22;
   group.add(portLogo);
 
-  // Foredeck Saronic geometric delta emblem (visible from aerial / canyon camera angles)
   const deckLogoTex = createSaronicDeckEmblemTexture(accentCss);
   const deckLogo = new THREE.Mesh(
     new THREE.PlaneGeometry(3.4, 3.4),
@@ -684,7 +854,6 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   deckLogo.position.set(0, 2.26, 6.2);
   group.add(deckLogo);
 
-  // Elevated double-sided Saronic tactical callsign placard above mast so logo is crisp even from afar
   const bannerMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(11.5, 2.8),
     new THREE.MeshBasicMaterial({
@@ -726,20 +895,16 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   return { group, bannerMesh };
 }
 
-// Evaluate position along each flooded gorge waterway so Saronic ASVs cruise strictly inside the water gorges
 function sampleFleetWaterwayPath(routeType, t) {
   if (routeType === 'mainFjordNorthSouth') {
-    // Smoothly patrols back and forth along the flooded North-South central fjord gorge
     const z = Math.sin(t) * 440.0;
     const x = getMainFjordX(z) + Math.cos(t * 2.0) * 8.0;
     return { x, z };
   } else if (routeType === 'crossGorgeEastWest') {
-    // Smoothly patrols along the flooded East-West tributary gorge canyon
     const x = Math.sin(t) * 430.0;
     const z = getCrossGorgeZ(x) + Math.sin(t * 2.0) * 7.0;
     return { x, z };
   } else {
-    // S-curve patrol weaving from the Southern fjord mouth into the Eastern gorge
     const s = Math.sin(t);
     if (s >= 0.0) {
       const z = s * 420.0;
@@ -790,11 +955,12 @@ const fleet = [
   },
 ];
 fleet.forEach((v) => baseScene.add(v.group));
-// 4. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
+
+// 5. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
 function createPrecipitationSystem(dropCount = 9000) {
   const geo = new THREE.BufferGeometry();
-  const positions = new Float32Array(dropCount * 6); // 2 vertices per raindrop streak
-  const seeds = new Float32Array(dropCount * 2);     // 0 for top vertex, 1 for bottom tip
+  const positions = new Float32Array(dropCount * 6);
+  const seeds = new Float32Array(dropCount * 2);
 
   for (let i = 0; i < dropCount; i++) {
     const rx = (Math.random() - 0.5) * 900;
@@ -841,7 +1007,6 @@ function createPrecipitationSystem(dropCount = 9000) {
         float cellSpan = 750.0;
         float maxH = max(uCloudBaseY + 25.0, 90.0);
 
-        // Wrap raindrops continuously around camera XZ so rain is always dense nearby
         vec3 basePos = position;
         float speed = 135.0 + fract(sin(basePos.x * 12.9898 + basePos.z * 78.233) * 43758.5453) * 45.0;
 
@@ -849,7 +1014,6 @@ function createPrecipitationSystem(dropCount = 9000) {
         vec2 relXZ = mod(basePos.xz - uCameraPos.xz + cellSpan * 0.5, cellSpan) - cellSpan * 0.5;
         vec3 worldPos = vec3(uCameraPos.x + relXZ.x, yFall, uCameraPos.z + relXZ.z);
 
-        // Slant streak along wind vector
         float streakLen = mix(4.5, 9.5, uRainIntensity);
         vec3 streakVec = normalize(vec3(uWindXZ.x * 0.35, -speed, uWindXZ.y * 0.35)) * streakLen;
         worldPos += streakVec * aTip;
@@ -917,10 +1081,10 @@ const elGenusInfo = document.getElementById('genus-info');
 const elDebugCaption = document.getElementById('debug-caption');
 
 const DEBUG_CAPTIONS = [
-  'Mode 1 (Final Composite): Full physically-based volumetric clouds with sunlight scattering, self-shadowing, and rain.',
+  'Mode 1 (Final Composite): Full volumetric clouds with topographic airflow deflection, orographic lift over ridges, and rain.',
   'Mode 2 (Optical Transmittance T): Shows how much background light passes through the clouds (1.0 = clear sky, 0.0 = opaque cloud core in coral).',
   'Mode 3 (Radial Scene Depth tScene): Visualizes true 3D Euclidean distance to mountain ridges & canyons (50m contour rings) used for soft cloud-terrain occlusion.',
-  'Mode 4 (3D Noise Slice RGB): Cross-section of the GPU-baked 3D noise textures (Red = Perlin-Worley base, Green = Worley lobes, Blue = high-freq detail, Cyan = active cloud boundary).',
+  'Mode 4 (3D Noise & Airflow Slice): Cross-section of 3D noise + solid mountain rock cores (amber rim) showing air streamlines splitting around peaks.',
 ];
 
 function formatMorphLabel(m) {
@@ -1124,7 +1288,7 @@ function animate(now) {
   if (isContextLost) return;
   rafId = requestAnimationFrame(animate);
 
-  const dt = (now - lastFrameTime) * 0.001;
+  const dt = Math.min((now - lastFrameTime) * 0.001, 0.05);
   lastFrameTime = now;
   const elapsed = (now - startTime) * 0.001;
 
@@ -1140,6 +1304,9 @@ function animate(now) {
     v.group.lookAt(pNext.x, 0.15, pNext.z);
   }
 
+  // Advance 3D topographic airflow streamlines (deflecting around peaks & funneling through gorges)
+  airflowStreams.update(dt, atmosphere.state.windSpeed);
+
   // Update 3D rain streaks around camera
   if (rainSystem.lines.visible) {
     rainSystem.mat.uniforms.uTime.value = elapsed;
@@ -1153,7 +1320,7 @@ function animate(now) {
 
   atmosphere.update(elapsed, camera);
 
-  // Pass 1: Render opaque maritime scene + 3D rainfall into offscreen render target + DepthTexture
+  // Pass 1: Render opaque maritime scene + 3D airflow streamlines + rainfall into offscreen render target + DepthTexture
   renderer.setRenderTarget(sceneTarget);
   renderer.clear();
   renderer.render(baseScene, camera);
