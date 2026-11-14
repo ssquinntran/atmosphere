@@ -10,51 +10,204 @@ export const DEBUG_MODES = {
   noise: 3,
 };
 
+/**
+ * All 10 WMO Cloud Genera (World Meteorological Organization International Cloud Atlas):
+ * Low-étage:    0 Cumulus (Cu), 1 Stratus (St), 2 Stratocumulus (Sc)
+ * Middle-étage: 3 Altocumulus (Ac), 4 Altostratus (As), 5 Nimbostratus (Ns)
+ * High-étage:   6 Cirrus (Ci), 7 Cirrocumulus (Cc), 8 Cirrostratus (Cs)
+ * Towering:     9 Cumulonimbus (Cb)
+ */
+export const CLOUD_GENERA = {
+  cumulus: {
+    id: 0,
+    name: 'Cumulus (Cu)',
+    etage: 'Low (90–260 m)',
+    description: 'Detached, dense cauliflower towers with crisp flat bases and sunlit domes.',
+    coverage: 0.64,
+    baseAltitude: 92,
+    slabThickness: 165,
+    extinction: 0.088,
+    densityMultiplier: 1.65,
+    rainIntensity: 0.0,
+    shapeParams: [1.05, 0.95, 0.92, 0.08], // [horizScale, vertStretch, cellularity, shear]
+  },
+  stratus: {
+    id: 1,
+    name: 'Stratus (St)',
+    etage: 'Low (55–140 m)',
+    description: 'Uniform, featureless gray horizontal cloud layer hugging the lower atmosphere.',
+    coverage: 0.86,
+    baseAltitude: 58,
+    slabThickness: 85,
+    extinction: 0.072,
+    densityMultiplier: 1.45,
+    rainIntensity: 0.18,
+    shapeParams: [0.52, 1.85, 0.15, 0.02],
+  },
+  stratocumulus: {
+    id: 2,
+    name: 'Stratocumulus (Sc)',
+    etage: 'Low (80–200 m)',
+    description: 'Low, lumpy honeycomb cloud rolls and rounded patches with bright sky breaks.',
+    coverage: 0.72,
+    baseAltitude: 82,
+    slabThickness: 120,
+    extinction: 0.082,
+    densityMultiplier: 1.55,
+    rainIntensity: 0.0,
+    shapeParams: [0.92, 1.35, 0.78, 0.05],
+  },
+  altocumulus: {
+    id: 3,
+    name: 'Altocumulus (Ac)',
+    etage: 'Middle (155–265 m)',
+    description: 'Mid-altitude "mackerel sky" rippled cellular puffs and patchy wave bands.',
+    coverage: 0.62,
+    baseAltitude: 155,
+    slabThickness: 110,
+    extinction: 0.078,
+    densityMultiplier: 1.55,
+    rainIntensity: 0.0,
+    shapeParams: [1.65, 1.45, 0.95, 0.12],
+  },
+  altostratus: {
+    id: 4,
+    name: 'Altostratus (As)',
+    etage: 'Middle (145–270 m)',
+    description: 'Mid-altitude fibrous blue-gray sheet covering the sky with diffused sunlight.',
+    coverage: 0.84,
+    baseAltitude: 145,
+    slabThickness: 125,
+    extinction: 0.068,
+    densityMultiplier: 1.42,
+    rainIntensity: 0.12,
+    shapeParams: [0.58, 1.65, 0.25, 0.18],
+  },
+  nimbostratus: {
+    id: 5,
+    name: 'Nimbostratus (Ns)',
+    etage: 'Low–Middle (65–275 m)',
+    description: 'Dark, thick, widespread storm layer producing steady continuous rain.',
+    coverage: 0.92,
+    baseAltitude: 65,
+    slabThickness: 210,
+    extinction: 0.105,
+    densityMultiplier: 1.85,
+    rainIntensity: 0.85,
+    shapeParams: [0.75, 0.85, 0.45, 0.22],
+  },
+  cirrus: {
+    id: 6,
+    name: 'Cirrus (Ci)',
+    etage: 'High (235–325 m)',
+    description: 'High-altitude delicate white ice-crystal filaments and wind-sheared mares\' tails.',
+    coverage: 0.56,
+    baseAltitude: 235,
+    slabThickness: 90,
+    extinction: 0.054,
+    densityMultiplier: 1.55,
+    rainIntensity: 0.0,
+    shapeParams: [1.35, 2.2, 0.38, 1.45],
+  },
+  cirrocumulus: {
+    id: 7,
+    name: 'Cirrocumulus (Cc)',
+    etage: 'High (230–310 m)',
+    description: 'High-altitude thin white grain-like ice ripples arranged in fine honeycomb rows.',
+    coverage: 0.58,
+    baseAltitude: 230,
+    slabThickness: 80,
+    extinction: 0.064,
+    densityMultiplier: 1.60,
+    rainIntensity: 0.0,
+    shapeParams: [2.35, 2.1, 0.98, 0.35],
+  },
+  cirrostratus: {
+    id: 8,
+    name: 'Cirrostratus (Cs)',
+    etage: 'High (220–315 m)',
+    description: 'High, translucent silky ice-crystal veil covering the upper sky dome.',
+    coverage: 0.80,
+    baseAltitude: 220,
+    slabThickness: 95,
+    extinction: 0.048,
+    densityMultiplier: 1.35,
+    rainIntensity: 0.0,
+    shapeParams: [0.65, 2.0, 0.20, 0.65],
+  },
+  cumulonimbus: {
+    id: 9,
+    name: 'Cumulonimbus (Cb)',
+    etage: 'Towering (68–368 m)',
+    description: 'Massive vertical thunderhead tower with a spreading upper anvil and heavy rain.',
+    coverage: 0.78,
+    baseAltitude: 68,
+    slabThickness: 300,
+    extinction: 0.112,
+    densityMultiplier: 1.95,
+    rainIntensity: 0.95,
+    shapeParams: [0.95, 0.62, 0.94, 0.48],
+  },
+};
+
 export const WEATHER_PRESETS = {
   tradeWinds: {
-    coverage: 0.56,
-    baseAltitude: 95,
-    slabThickness: 130,
-    sunElevationDeg: 28,
+    cloudGenus: 'cumulus',
+    coverage: 0.65,
+    baseAltitude: 92,
+    slabThickness: 165,
+    sunElevationDeg: 32,
     sunAzimuthDeg: 42,
     windSpeed: 14,
-    extinction: 0.042,
-    sunColor: 0xfff3dc,
-    sunIntensity: 3.1,
-    skyColor: 0x6ea4d8,
+    extinction: 0.088,
+    densityMultiplier: 1.68,
+    rainIntensity: 0.0,
+    sunColor: 0xfff5e0,
+    sunIntensity: 3.6,
+    skyColor: 0x4f86c6,
   },
   clearPatrol: {
-    coverage: 0.34,
-    baseAltitude: 115,
-    slabThickness: 110,
-    sunElevationDeg: 46,
+    cloudGenus: 'cirrus',
+    coverage: 0.54,
+    baseAltitude: 230,
+    slabThickness: 90,
+    sunElevationDeg: 45,
     sunAzimuthDeg: 35,
-    windSpeed: 8,
-    extinction: 0.036,
-    sunColor: 0xfff8eb,
-    sunIntensity: 3.4,
-    skyColor: 0x7cb5eb,
+    windSpeed: 18,
+    extinction: 0.058,
+    densityMultiplier: 1.55,
+    rainIntensity: 0.0,
+    sunColor: 0xfff9ed,
+    sunIntensity: 3.8,
+    skyColor: 0x5692d6,
   },
   squall: {
-    coverage: 0.84,
-    baseAltitude: 75,
-    slabThickness: 165,
-    sunElevationDeg: 14,
+    cloudGenus: 'cumulonimbus',
+    coverage: 0.86,
+    baseAltitude: 68,
+    slabThickness: 290,
+    sunElevationDeg: 16,
     sunAzimuthDeg: 55,
     windSpeed: 28,
-    extinction: 0.062,
+    extinction: 0.110,
+    densityMultiplier: 1.92,
+    rainIntensity: 0.92,
     sunColor: 0xffc994,
-    sunIntensity: 2.3,
-    skyColor: 0x4b637d,
+    sunIntensity: 2.6,
+    skyColor: 0x3b5068,
   },
 };
 
 export class AtmosphereLayer {
   constructor(options = {}) {
     this.mapExtent = options.mapExtent ?? 1200; // [-600, 600] in X and Z
+    const defaultGenus = CLOUD_GENERA.cumulus;
     this.state = {
       ...WEATHER_PRESETS.tradeWinds,
-      maxSteps: options.maxSteps ?? 36,
+      cloudGenus: 'cumulus',
+      cloudGenusId: defaultGenus.id,
+      shapeParams: [...defaultGenus.shapeParams],
+      maxSteps: options.maxSteps ?? 48,
       debugMode: options.debugMode ?? DEBUG_MODES.final,
       originOffsetX: 0,
       originOffsetZ: 0,
@@ -97,14 +250,24 @@ export class AtmosphereLayer {
         uBoundsMaxAndCoverage: { value: new THREE.Vector4(halfExtent, yMax, halfExtent, this.state.coverage) },
         uSunDirAndElevation: { value: new THREE.Vector4(0.6, 0.5, 0.6, 0.5) },
         uSunColorAndIntensity: { value: new THREE.Vector4(1.0, 0.95, 0.86, this.state.sunIntensity) },
-        uSkyColorAndHaze: { value: new THREE.Vector4(0.43, 0.64, 0.85, 0.00085) },
+        uSkyColorAndHaze: { value: new THREE.Vector4(0.31, 0.53, 0.78, 0.00055) },
         uWindAndTime: { value: new THREE.Vector4(10.0, 6.0, 0.0, this.state.extinction) },
         uCameraPosAndSteps: { value: new THREE.Vector4(0, 180, 320, this.state.maxSteps) },
         uCameraForwardAndNear: { value: new THREE.Vector4(0, -0.4, -0.9, 1.0) },
-        uViewportAndFar: { value: new THREE.Vector4(1280, 720, 4000.0, 0.24) },
-        uDebugParams: { value: new THREE.Vector4(this.state.debugMode, 0.0, 0.0, 0.0) },
+        uViewportAndFar: { value: new THREE.Vector4(1280, 720, 4000.0, 0.28) },
+        uDebugParams: {
+          value: new THREE.Vector4(
+            this.state.debugMode,
+            this.state.cloudGenusId,
+            this.state.rainIntensity,
+            this.state.densityMultiplier
+          ),
+        },
         uWorldOriginOffset: {
           value: new THREE.Vector4(this.state.originOffsetX, this.state.originOffsetZ, 0.0, 0.0),
+        },
+        uCloudShapeParams: {
+          value: new THREE.Vector4(...this.state.shapeParams),
         },
         uMacroNoise: { value: this.macroNoise },
         uDetailNoise: { value: this.detailNoise },
@@ -114,7 +277,7 @@ export class AtmosphereLayer {
       },
     });
 
-    // Unit cube scaled and positioned dynamically to match [yMin, yMax]
+    // Unit cube scaled and positioned dynamically to match [yMin, yMax] (or 0..yMax with rain)
     const boxGeo = new THREE.BoxGeometry(1, 1, 1);
     this.proxyMesh = new THREE.Mesh(boxGeo, this.material);
     this.proxyMesh.frustumCulled = false;
@@ -135,10 +298,6 @@ export class AtmosphereLayer {
     this.blueNoise = CloudNoiseBaker.createBlueNoiseJitter(64);
   }
 
-  /**
-   * Releases invalidated WebGL query and texture handles when the browser signals
-   * a GPU context loss event (e.g., driver reset or background tab reclamation).
-   */
   onContextLost() {
     this.gl = null;
     this.timerExt = null;
@@ -156,10 +315,6 @@ export class AtmosphereLayer {
     this.blueNoise = null;
   }
 
-  /**
-   * Re-bakes GPU 3D noise volumes and flags the custom shader program for recompilation
-   * once WebGL2 context restoration completes.
-   */
   onContextRestored(renderer) {
     this._initGpuResources(renderer);
 
@@ -173,10 +328,6 @@ export class AtmosphereLayer {
     }
   }
 
-  /**
-   * Shifts Relative-To-Center (RTC) world-space coordinates (in meters) so multi-kilometer
-   * map pans stay centered near the local float32 origin without precision jitter.
-   */
   setWorldOriginOffset(offsetX, offsetZ) {
     this.state.originOffsetX = offsetX;
     this.state.originOffsetZ = offsetZ;
@@ -199,10 +350,42 @@ export class AtmosphereLayer {
     }
   }
 
+  setCloudGenus(genusKey) {
+    const genus = CLOUD_GENERA[genusKey];
+    if (!genus) return;
+    this.state.cloudGenus = genusKey;
+    this.state.cloudGenusId = genus.id;
+    this.state.coverage = genus.coverage;
+    this.state.baseAltitude = genus.baseAltitude;
+    this.state.slabThickness = genus.slabThickness;
+    this.state.extinction = genus.extinction;
+    this.state.densityMultiplier = genus.densityMultiplier;
+    this.state.rainIntensity = genus.rainIntensity;
+    this.state.shapeParams = [...genus.shapeParams];
+
+    // Darken sky slightly for heavy storm genera (Nimbostratus / Cumulonimbus)
+    if (genusKey === 'nimbostratus' || genusKey === 'cumulonimbus') {
+      this.state.skyColor = 0x3b5068;
+      this.state.sunIntensity = 2.6;
+    } else if (genusKey === 'stratus' || genusKey === 'altostratus') {
+      this.state.skyColor = 0x516e8c;
+      this.state.sunIntensity = 3.0;
+    } else {
+      this.state.skyColor = 0x4f86c6;
+      this.state.sunIntensity = 3.6;
+    }
+
+    this._syncBoundsAndLighting();
+  }
+
   applyPreset(presetName) {
     const preset = WEATHER_PRESETS[presetName];
     if (!preset) return;
-    Object.assign(this.state, preset);
+    const genus = CLOUD_GENERA[preset.cloudGenus] ?? CLOUD_GENERA.cumulus;
+    Object.assign(this.state, preset, {
+      cloudGenusId: genus.id,
+      shapeParams: [...genus.shapeParams],
+    });
     this._syncBoundsAndLighting();
   }
 
@@ -218,8 +401,11 @@ export class AtmosphereLayer {
     const yMin = this.state.baseAltitude;
     const yMax = yMin + this.state.slabThickness;
 
-    this.proxyMesh.scale.set(this.mapExtent, this.state.slabThickness, this.mapExtent);
-    this.proxyMesh.position.set(0, yMin + this.state.slabThickness * 0.5, 0);
+    // Expand proxy geometry down to y=0 when rain is active so sub-cloud virga rays run
+    const proxyMinY = this.state.rainIntensity > 0.01 ? 0 : yMin;
+    const proxyHeight = yMax - proxyMinY;
+    this.proxyMesh.scale.set(this.mapExtent, proxyHeight, this.mapExtent);
+    this.proxyMesh.position.set(0, proxyMinY + proxyHeight * 0.5, 0);
 
     this.material.uniforms.uBoundsMinAndFade.value.set(-halfExtent, yMin, -halfExtent, 35.0);
     this.material.uniforms.uBoundsMaxAndCoverage.value.set(
@@ -259,7 +445,7 @@ export class AtmosphereLayer {
       skyCol.r,
       skyCol.g,
       skyCol.b,
-      0.00085
+      0.00055
     );
 
     const windAngle = THREE.MathUtils.degToRad(32);
@@ -268,7 +454,13 @@ export class AtmosphereLayer {
     this.material.uniforms.uWindAndTime.value.w = this.state.extinction;
 
     this.material.uniforms.uCameraPosAndSteps.value.w = this.state.maxSteps;
-    this.material.uniforms.uDebugParams.value.x = this.state.debugMode;
+    this.material.uniforms.uDebugParams.value.set(
+      this.state.debugMode,
+      this.state.cloudGenusId,
+      this.state.rainIntensity,
+      this.state.densityMultiplier
+    );
+    this.material.uniforms.uCloudShapeParams.value.set(...this.state.shapeParams);
     this.material.uniforms.uWorldOriginOffset.value.set(
       this.state.originOffsetX,
       this.state.originOffsetZ,
