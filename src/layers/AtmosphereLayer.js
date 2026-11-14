@@ -29,7 +29,7 @@ export const CLOUD_GENERA = {
     extinction: 0.088,
     densityMultiplier: 1.65,
     rainIntensity: 0.0,
-    shapeParams: [1.05, 0.95, 0.92, 0.08], // [horizScale, vertStretch, cellularity, shear]
+    shapeParams: [1.05, 0.95, 0.92, 0.08],
   },
   stratus: {
     id: 1,
@@ -162,6 +162,7 @@ export const WEATHER_PRESETS = {
     extinction: 0.088,
     densityMultiplier: 1.68,
     rainIntensity: 0.0,
+    tornadoStrength: 0.0,
     sunColor: 0xfff5e0,
     sunIntensity: 3.6,
     skyColor: 0x4f86c6,
@@ -177,6 +178,7 @@ export const WEATHER_PRESETS = {
     extinction: 0.058,
     densityMultiplier: 1.55,
     rainIntensity: 0.0,
+    tornadoStrength: 0.0,
     sunColor: 0xfff9ed,
     sunIntensity: 3.8,
     skyColor: 0x5692d6,
@@ -192,12 +194,12 @@ export const WEATHER_PRESETS = {
     extinction: 0.110,
     densityMultiplier: 1.92,
     rainIntensity: 0.92,
+    tornadoStrength: 0.85,
     sunColor: 0xffc994,
     sunIntensity: 2.6,
     skyColor: 0x3b5068,
   },
 };
-
 export class AtmosphereLayer {
   constructor(options = {}) {
     this.mapExtent = options.mapExtent ?? 1200; // [-600, 600] in X and Z
@@ -211,6 +213,10 @@ export class AtmosphereLayer {
       debugMode: options.debugMode ?? DEBUG_MODES.final,
       originOffsetX: 0,
       originOffsetZ: 0,
+      tornadoX: 0.0,
+      tornadoZ: 45.0,
+      tornadoStrength: 0.0,
+      waterLevel: 0.0,
     };
 
     this.macroNoise = null;
@@ -238,7 +244,6 @@ export class AtmosphereLayer {
     const yMin = this.state.baseAltitude;
     const yMax = yMin + this.state.slabThickness;
 
-    // Default flat terrain texture until main scene supplies live morphable terrain height/flow map
     if (!this.terrainMap) {
       const emptyData = new Uint8Array(4 * 4 * 4);
       for (let i = 0; i < 16; i++) {
@@ -283,6 +288,14 @@ export class AtmosphereLayer {
         uCloudShapeParams: {
           value: new THREE.Vector4(...this.state.shapeParams),
         },
+        uVortexAndTide: {
+          value: new THREE.Vector4(
+            this.state.tornadoX,
+            this.state.tornadoZ,
+            this.state.tornadoStrength,
+            this.state.waterLevel
+          ),
+        },
         uMacroNoise: { value: this.macroNoise },
         uDetailNoise: { value: this.detailNoise },
         uWeatherMap: { value: this.weatherMap },
@@ -292,7 +305,6 @@ export class AtmosphereLayer {
       },
     });
 
-    // Unit cube scaled and positioned dynamically to match [yMin, yMax] (plus orographic lift headroom)
     const boxGeo = new THREE.BoxGeometry(1, 1, 1);
     this.proxyMesh = new THREE.Mesh(boxGeo, this.material);
     this.proxyMesh.frustumCulled = false;
@@ -306,7 +318,6 @@ export class AtmosphereLayer {
     this.gl = renderer.getContext();
     this.timerExt = this.gl.getExtension('EXT_disjoint_timer_query_webgl2');
 
-    // Bake 64³ macro Perlin-Worley + 32³ Worley detail erosion textures on GPU
     this.macroNoise = CloudNoiseBaker.bakeVolumeTexture(renderer, 64, 8, 4.0);
     this.detailNoise = CloudNoiseBaker.bakeVolumeTexture(renderer, 32, 8, 6.0);
     this.weatherMap = CloudNoiseBaker.createWeatherMap(256);
@@ -351,6 +362,30 @@ export class AtmosphereLayer {
     }
   }
 
+  setVortexAndTide(tornadoX, tornadoZ, tornadoStrength, waterLevel) {
+    this.state.tornadoX = tornadoX;
+    this.state.tornadoZ = tornadoZ;
+    this.state.tornadoStrength = tornadoStrength;
+    this.state.waterLevel = waterLevel;
+    if (this.material) {
+      this.material.uniforms.uVortexAndTide.value.set(
+        tornadoX,
+        tornadoZ,
+        tornadoStrength,
+        waterLevel
+      );
+      const halfExtent = this.mapExtent * 0.5;
+      const yMin = this.state.baseAltitude;
+      const yMax = yMin + this.state.slabThickness;
+      const hasSubCloud = this.state.rainIntensity > 0.01 || tornadoStrength > 0.01;
+      const proxyMinY = hasSubCloud ? Math.min(waterLevel, 0.0) : yMin;
+      const proxyMaxY = yMax + 65.0;
+      const proxyHeight = proxyMaxY - proxyMinY;
+      this.proxyMesh.scale.set(this.mapExtent, proxyHeight, this.mapExtent);
+      this.proxyMesh.position.set(0, proxyMinY + proxyHeight * 0.5, 0);
+    }
+  }
+
   setWorldOriginOffset(offsetX, offsetZ) {
     this.state.originOffsetX = offsetX;
     this.state.originOffsetZ = offsetZ;
@@ -386,7 +421,6 @@ export class AtmosphereLayer {
     this.state.rainIntensity = genus.rainIntensity;
     this.state.shapeParams = [...genus.shapeParams];
 
-    // Darken sky slightly for heavy storm genera (Nimbostratus / Cumulonimbus)
     if (genusKey === 'nimbostratus' || genusKey === 'cumulonimbus') {
       this.state.skyColor = 0x3b5068;
       this.state.sunIntensity = 2.6;
@@ -424,8 +458,8 @@ export class AtmosphereLayer {
     const yMin = this.state.baseAltitude;
     const yMax = yMin + this.state.slabThickness;
 
-    // Expand proxy geometry vertically (+65m headroom for orographic lift over tall peaks, and down to y=0 for rain)
-    const proxyMinY = this.state.rainIntensity > 0.01 ? 0 : yMin;
+    const hasSubCloud = this.state.rainIntensity > 0.01 || this.state.tornadoStrength > 0.01;
+    const proxyMinY = hasSubCloud ? Math.min(this.state.waterLevel, 0.0) : yMin;
     const proxyMaxY = yMax + 65.0;
     const proxyHeight = proxyMaxY - proxyMinY;
     this.proxyMesh.scale.set(this.mapExtent, proxyHeight, this.mapExtent);
@@ -485,6 +519,12 @@ export class AtmosphereLayer {
       this.state.densityMultiplier
     );
     this.material.uniforms.uCloudShapeParams.value.set(...this.state.shapeParams);
+    this.material.uniforms.uVortexAndTide.value.set(
+      this.state.tornadoX,
+      this.state.tornadoZ,
+      this.state.tornadoStrength,
+      this.state.waterLevel
+    );
     this.material.uniforms.uWorldOriginOffset.value.set(
       this.state.originOffsetX,
       this.state.originOffsetZ,
@@ -510,6 +550,7 @@ export class AtmosphereLayer {
       uSunDirAndElevation: this.material.uniforms.uSunDirAndElevation,
       uWorldOriginOffset: this.material.uniforms.uWorldOriginOffset,
       uTerrainMap: this.material.uniforms.uTerrainMap,
+      uVortexAndTide: this.material.uniforms.uVortexAndTide,
     };
   }
 
