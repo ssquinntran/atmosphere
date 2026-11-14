@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AtmosphereLayer } from './layers/AtmosphereLayer.js';
+import { AtmosphereLayer, CLOUD_GENERA } from './layers/AtmosphereLayer.js';
 
 const canvas = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({
@@ -11,31 +11,32 @@ const renderer = new THREE.WebGLRenderer({
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.08;
 
 // Base scene (rendered to offscreen target so hardware depth is available to clouds)
 const baseScene = new THREE.Scene();
-baseScene.background = new THREE.Color(0x6ea4d8);
-baseScene.fog = new THREE.FogExp2(0x7aaad8, 0.00075);
+baseScene.background = new THREE.Color(0x4f86c6);
+baseScene.fog = new THREE.FogExp2(0x5b8ec8, 0.00055);
 
 // Overlay scene containing only the volumetric AtmosphereLayer proxy slab
 const atmosphereScene = new THREE.Scene();
 
 const camera = new THREE.PerspectiveCamera(
-  52,
+  54,
   window.innerWidth / window.innerHeight,
   1.0,
   3500.0
 );
-camera.position.set(-210, 145, 290);
+// Position camera slightly lower and tilted up toward the cloud deck so clouds are front-and-center
+camera.position.set(-220, 68, 285);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 45, 0);
+controls.target.set(0, 108, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.maxPolarAngle = Math.PI * 0.495;
 controls.minDistance = 40;
-controls.maxDistance = 850;
+controls.maxDistance = 950;
 controls.update();
 
 // Offscreen WebGLRenderTarget with hardware DepthTexture
@@ -53,21 +54,23 @@ const sceneTarget = new THREE.WebGLRenderTarget(drawingSize.x, drawingSize.y, {
 });
 
 // Initialize AtmosphereLayer and expose handle on window for DevTools RTC/debug inspection
-const atmosphere = new AtmosphereLayer({ mapExtent: 1200, maxSteps: 36 });
+const atmosphere = new AtmosphereLayer({ mapExtent: 1200, maxSteps: 48 });
 atmosphere.init(renderer, atmosphereScene);
 atmosphere.setSceneDepthTexture(depthTexture);
 atmosphere.resize(drawingSize.x, drawingSize.y);
 window.atmosphereLayer = atmosphere;
 
 // Lighting for maritime terrain & surface vessels
-const sunLight = new THREE.DirectionalLight(0xfff3dc, 2.6);
+const sunLight = new THREE.DirectionalLight(0xfff5e0, 2.8);
 baseScene.add(sunLight);
 
-const hemiLight = new THREE.HemisphereLight(0x8ec5fc, 0x0b253a, 1.05);
+const hemiLight = new THREE.HemisphereLight(0x8ec5fc, 0x0b253a, 1.08);
 baseScene.add(hemiLight);
 
-// 1. Ocean Surface with RTC-Synchronized Drifting Cloud Shadows
+// 1. Ocean Surface with RTC-Synchronized Drifting Cloud Shadows + Raindrop Ripple Rings
 const sharedCloudUniforms = atmosphere.getSharedGroundUniforms();
+const uRainSplashUniform = { value: 0.0 };
+
 const oceanGeo = new THREE.PlaneGeometry(1400, 1400, 1, 1);
 oceanGeo.rotateX(-Math.PI / 2);
 
@@ -77,7 +80,7 @@ const oceanMat = new THREE.MeshStandardMaterial({
   metalness: 0.65,
 });
 
-// Inject analytical ripples + RTC-aware cloud shadow projection onto y = uCloudMinY
+// Inject analytical ripples + RTC-aware cloud shadow projection + raindrop splash rings onto y = 0
 oceanMat.onBeforeCompile = (shader) => {
   shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
   shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
@@ -85,60 +88,80 @@ oceanMat.onBeforeCompile = (shader) => {
   shader.uniforms.uBoundsMaxAndCoverage = sharedCloudUniforms.uBoundsMaxAndCoverage;
   shader.uniforms.uSunDirAndElevation = sharedCloudUniforms.uSunDirAndElevation;
   shader.uniforms.uWorldOriginOffset = sharedCloudUniforms.uWorldOriginOffset;
+  shader.uniforms.uRainIntensity = uRainSplashUniform;
 
   shader.vertexShader = shader.vertexShader
     .replace(
       '#include <common>',
       `#include <common>
-       varying vec3 vOceanWorldPos;`
+      varying vec3 vOceanWorldPos;`
     )
     .replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
-       vOceanWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+      vOceanWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
     );
 
   shader.fragmentShader = shader.fragmentShader
     .replace(
       '#include <common>',
       `#include <common>
-       varying vec3 vOceanWorldPos;
-       uniform sampler2D uWeatherMap;
-       uniform vec4 uWindAndTime;
-       uniform vec4 uBoundsMinAndFade;
-       uniform vec4 uBoundsMaxAndCoverage;
-       uniform vec4 uSunDirAndElevation;
-       uniform vec4 uWorldOriginOffset;`
+      varying vec3 vOceanWorldPos;
+      uniform sampler2D uWeatherMap;
+      uniform vec4 uWindAndTime;
+      uniform vec4 uBoundsMinAndFade;
+      uniform vec4 uBoundsMaxAndCoverage;
+      uniform vec4 uSunDirAndElevation;
+      uniform vec4 uWorldOriginOffset;
+      uniform float uRainIntensity;
+
+      float rainRingPattern(vec2 p, float t) {
+        vec2 cell = floor(p);
+        vec2 f = fract(p) - 0.5;
+        float h = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+        float phase = fract(t * 1.85 + h);
+        float rad = phase * 0.46;
+        float ring = 1.0 - smoothstep(0.0, 0.055, abs(length(f) - rad));
+        return ring * (1.0 - phase) * step(0.42, h);
+      }`
     )
     .replace(
       '#include <dithering_fragment>',
       `
-       // Project ocean point along sun ray onto cloud base plane (y = uBoundsMinAndFade.y)
-       vec3 sunDir = normalize(uSunDirAndElevation.xyz);
-       float tCloudPlane = max((uBoundsMinAndFade.y - vOceanWorldPos.y) / max(sunDir.y, 0.08), 0.0);
-       vec2 shadowWorldXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
+      // Project ocean point along sun ray onto cloud base plane (y = uBoundsMinAndFade.y)
+      vec3 sunDir = normalize(uSunDirAndElevation.xyz);
+      float tCloudPlane = max((uBoundsMinAndFade.y - vOceanWorldPos.y) / max(sunDir.y, 0.08), 0.0);
+      vec2 shadowWorldXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
 
-       vec2 boxMinXZ = uBoundsMinAndFade.xz;
-       vec2 boxSizeXZ = uBoundsMaxAndCoverage.xz - boxMinXZ;
-       vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
-       vec2 weatherUV = (shadowWorldXZ - boxMinXZ) / boxSizeXZ + windOffset * 0.00085;
+      vec2 boxMinXZ = uBoundsMinAndFade.xz;
+      vec2 boxSizeXZ = uBoundsMaxAndCoverage.xz - boxMinXZ;
+      vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
+      vec2 weatherUV = (shadowWorldXZ - boxMinXZ) / boxSizeXZ + windOffset * 0.00085;
 
-       float weatherCov = texture2D(uWeatherMap, weatherUV).r;
-       float cloudDensityShadow = smoothstep(
-         1.0 - uBoundsMaxAndCoverage.w * 1.25,
-         1.0,
-         weatherCov
-       );
+      float weatherCov = texture2D(uWeatherMap, weatherUV).r;
+      float cloudDensityShadow = smoothstep(
+        1.0 - uBoundsMaxAndCoverage.w * 1.35,
+        1.0,
+        weatherCov
+      );
 
-       // Subtle procedural wave shimmer anchored to RTC world coordinates
-       vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
-       float wave = sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) *
-                    cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
-       gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * wave;
+      // Subtle procedural wave shimmer anchored to RTC world coordinates
+      vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
+      float wave = sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) *
+                   cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
+      gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * wave;
 
-       // Apply soft cloud shadow darkening on water surface
-       gl_FragColor.rgb *= mix(1.0, 0.46, cloudDensityShadow * 0.78);
-       #include <dithering_fragment>`
+      // Raindrop splash concentric ripples on water surface when raining
+      if (uRainIntensity > 0.01) {
+        float r1 = rainRingPattern(globalWaveXZ * 0.38, uWindAndTime.z);
+        float r2 = rainRingPattern(globalWaveXZ * 0.52 + vec2(17.3, 9.1), uWindAndTime.z * 1.15);
+        float splash = (r1 + r2) * uRainIntensity;
+        gl_FragColor.rgb += vec3(0.18, 0.25, 0.32) * splash;
+      }
+
+      // Apply soft cloud shadow darkening on water surface
+      gl_FragColor.rgb *= mix(1.0, 0.42, cloudDensityShadow * 0.82);
+      #include <dithering_fragment>`
     );
 };
 
@@ -256,29 +279,141 @@ const fleet = [
 ];
 fleet.forEach((v) => baseScene.add(v.mesh));
 
-// Sync scene directional light & sky colors with AtmosphereLayer
+// 4. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
+function createPrecipitationSystem(dropCount = 9000) {
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(dropCount * 6); // 2 vertices per raindrop streak
+  const seeds = new Float32Array(dropCount * 2);     // 0 for top vertex, 1 for bottom tip
+
+  for (let i = 0; i < dropCount; i++) {
+    const rx = (Math.random() - 0.5) * 900;
+    const ry = Math.random() * 260;
+    const rz = (Math.random() - 0.5) * 900;
+
+    const i6 = i * 6;
+    positions[i6] = rx;
+    positions[i6 + 1] = ry;
+    positions[i6 + 2] = rz;
+
+    positions[i6 + 3] = rx;
+    positions[i6 + 4] = ry;
+    positions[i6 + 5] = rz;
+
+    seeds[i * 2] = 0.0;
+    seeds[i * 2 + 1] = 1.0;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aTip', new THREE.BufferAttribute(seeds, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    uniforms: {
+      uTime: { value: 0.0 },
+      uRainIntensity: { value: 0.0 },
+      uWindXZ: { value: new THREE.Vector2(8.0, 5.0) },
+      uCameraPos: { value: new THREE.Vector3() },
+      uCloudBaseY: { value: 95.0 },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aTip;
+      uniform float uTime;
+      uniform float uRainIntensity;
+      uniform vec2 uWindXZ;
+      uniform vec3 uCameraPos;
+      uniform float uCloudBaseY;
+      varying float vAlpha;
+
+      void main() {
+        float cellSpan = 750.0;
+        float maxH = max(uCloudBaseY + 25.0, 90.0);
+
+        // Wrap raindrops continuously around camera XZ so rain is always dense nearby
+        vec3 basePos = position;
+        float speed = 135.0 + fract(sin(basePos.x * 12.9898 + basePos.z * 78.233) * 43758.5453) * 45.0;
+
+        float yFall = mod(basePos.y - uTime * speed, maxH);
+        vec2 relXZ = mod(basePos.xz - uCameraPos.xz + cellSpan * 0.5, cellSpan) - cellSpan * 0.5;
+        vec3 worldPos = vec3(uCameraPos.x + relXZ.x, yFall, uCameraPos.z + relXZ.z);
+
+        // Slant streak along wind vector
+        float streakLen = mix(4.5, 9.5, uRainIntensity);
+        vec3 streakVec = normalize(vec3(uWindXZ.x * 0.35, -speed, uWindXZ.y * 0.35)) * streakLen;
+        worldPos += streakVec * aTip;
+
+        float dist = length(worldPos.xz - uCameraPos.xz);
+        float distFade = 1.0 - smoothstep(140.0, 370.0, dist);
+        vAlpha = uRainIntensity * distFade * (aTip > 0.5 ? 0.55 : 0.08);
+
+        gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vAlpha;
+      void main() {
+        if (vAlpha <= 0.005) discard;
+        gl_FragColor = vec4(0.78, 0.88, 0.98, vAlpha);
+      }
+    `,
+  });
+
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.frustumCulled = false;
+  lines.visible = false;
+  return { lines, mat };
+}
+
+const rainSystem = createPrecipitationSystem(9000);
+baseScene.add(rainSystem.lines);
+
+// Sync scene directional light, sky colors, and rain state with AtmosphereLayer
 function syncSceneLighting() {
   const sunDir = atmosphere.getSunDirection();
   sunLight.position.copy(sunDir).multiplyScalar(600);
   sunLight.color.setHex(atmosphere.state.sunColor);
-  sunLight.intensity = atmosphere.state.sunIntensity * 0.85;
+
+  const rainDampen = 1.0 - atmosphere.state.rainIntensity * 0.38;
+  sunLight.intensity = atmosphere.state.sunIntensity * 0.82 * rainDampen;
 
   const skyCol = new THREE.Color(atmosphere.state.skyColor);
   baseScene.background.copy(skyCol);
   baseScene.fog.color.copy(skyCol);
+  baseScene.fog.density = 0.00055 + atmosphere.state.rainIntensity * 0.00065;
+
+  uRainSplashUniform.value = atmosphere.state.rainIntensity;
+  rainSystem.lines.visible = atmosphere.state.rainIntensity > 0.01;
+  rainSystem.mat.uniforms.uRainIntensity.value = atmosphere.state.rainIntensity;
+  rainSystem.mat.uniforms.uCloudBaseY.value = atmosphere.state.baseAltitude;
 }
 syncSceneLighting();
 
-// Wire up HUD presets, sliders, and 4-mode shader debug inspector
+// Wire up HUD presets, 10 WMO cloud genera selector, sliders, and 4-mode shader debug inspector
+const ctrlGenus = document.getElementById('ctrl-genus');
 const ctrlCoverage = document.getElementById('ctrl-coverage');
+const ctrlDensity = document.getElementById('ctrl-density');
+const ctrlRain = document.getElementById('ctrl-rain');
 const ctrlBase = document.getElementById('ctrl-base');
 const ctrlSun = document.getElementById('ctrl-sun');
 const ctrlWind = document.getElementById('ctrl-wind');
 const ctrlSteps = document.getElementById('ctrl-steps');
 const ctrlDebug = document.getElementById('ctrl-debug');
+const elGenusInfo = document.getElementById('genus-info');
+const elDebugCaption = document.getElementById('debug-caption');
+
+const DEBUG_CAPTIONS = [
+  'Mode 1 (Final Composite): Full physically-based volumetric clouds with sunlight scattering, self-shadowing, and rain.',
+  'Mode 2 (Optical Transmittance T): Shows how much background light passes through the clouds (1.0 = clear sky, 0.0 = opaque cloud core in coral).',
+  'Mode 3 (Radial Scene Depth tScene): Visualizes true 3D Euclidean distance to terrain & ocean (50m contour rings) used for soft cloud-terrain occlusion.',
+  'Mode 4 (3D Noise Slice RGB): Cross-section of the GPU-baked 3D noise textures (Red = Perlin-Worley base, Green = Worley lobes, Blue = high-freq detail, Cyan = active cloud boundary).',
+];
 
 function refreshControlReadouts() {
+  ctrlGenus.value = atmosphere.state.cloudGenus;
   ctrlCoverage.value = atmosphere.state.coverage;
+  ctrlDensity.value = atmosphere.state.densityMultiplier;
+  ctrlRain.value = atmosphere.state.rainIntensity;
   ctrlBase.value = atmosphere.state.baseAltitude;
   ctrlSun.value = atmosphere.state.sunElevationDeg;
   ctrlWind.value = atmosphere.state.windSpeed;
@@ -286,11 +421,23 @@ function refreshControlReadouts() {
   ctrlDebug.value = String(atmosphere.state.debugMode);
 
   document.getElementById('val-coverage').textContent = `${Math.round(atmosphere.state.coverage * 100)}%`;
+  document.getElementById('val-density').textContent = `${atmosphere.state.densityMultiplier.toFixed(2)}×`;
+  document.getElementById('val-rain').textContent = `${Math.round(atmosphere.state.rainIntensity * 100)}%`;
   document.getElementById('val-base').textContent = `${atmosphere.state.baseAltitude} m`;
   document.getElementById('val-sun').textContent = `${atmosphere.state.sunElevationDeg}°`;
   document.getElementById('val-wind').textContent = `${atmosphere.state.windSpeed} m/s`;
   document.getElementById('val-steps').textContent = `${atmosphere.state.maxSteps}`;
+
+  const genusMeta = CLOUD_GENERA[atmosphere.state.cloudGenus];
+  if (genusMeta && elGenusInfo) {
+    elGenusInfo.innerHTML = `<strong>${genusMeta.name} · ${genusMeta.etage}:</strong> ${genusMeta.description}`;
+  }
+
+  if (elDebugCaption) {
+    elDebugCaption.textContent = DEBUG_CAPTIONS[atmosphere.state.debugMode] ?? DEBUG_CAPTIONS[0];
+  }
 }
+refreshControlReadouts();
 
 document.querySelectorAll('.preset-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -302,13 +449,32 @@ document.querySelectorAll('.preset-btn').forEach((btn) => {
   });
 });
 
+ctrlGenus.addEventListener('change', (e) => {
+  document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+  atmosphere.setCloudGenus(e.target.value);
+  syncSceneLighting();
+  refreshControlReadouts();
+});
+
 ctrlCoverage.addEventListener('input', (e) => {
   atmosphere.setEnvironment({ coverage: parseFloat(e.target.value) });
   refreshControlReadouts();
 });
 
+ctrlDensity.addEventListener('input', (e) => {
+  atmosphere.setEnvironment({ densityMultiplier: parseFloat(e.target.value) });
+  refreshControlReadouts();
+});
+
+ctrlRain.addEventListener('input', (e) => {
+  atmosphere.setEnvironment({ rainIntensity: parseFloat(e.target.value) });
+  syncSceneLighting();
+  refreshControlReadouts();
+});
+
 ctrlBase.addEventListener('input', (e) => {
   atmosphere.setEnvironment({ baseAltitude: parseFloat(e.target.value) });
+  syncSceneLighting();
   refreshControlReadouts();
 });
 
@@ -430,9 +596,20 @@ function animate(now) {
     v.mesh.lookAt(nx, 0, nz);
   }
 
+  // Update 3D rain streaks around camera
+  if (rainSystem.lines.visible) {
+    rainSystem.mat.uniforms.uTime.value = elapsed;
+    rainSystem.mat.uniforms.uCameraPos.value.copy(camera.position);
+    const windAngle = THREE.MathUtils.degToRad(32);
+    rainSystem.mat.uniforms.uWindXZ.value.set(
+      Math.cos(windAngle) * atmosphere.state.windSpeed,
+      Math.sin(windAngle) * atmosphere.state.windSpeed
+    );
+  }
+
   atmosphere.update(elapsed, camera);
 
-  // Pass 1: Render opaque maritime scene into offscreen render target + DepthTexture
+  // Pass 1: Render opaque maritime scene + 3D rainfall into offscreen render target + DepthTexture
   renderer.setRenderTarget(sceneTarget);
   renderer.clear();
   renderer.render(baseScene, camera);
