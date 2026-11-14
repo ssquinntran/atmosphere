@@ -52,11 +52,12 @@ const sceneTarget = new THREE.WebGLRenderTarget(drawingSize.x, drawingSize.y, {
   depthTexture,
 });
 
-// Initialize AtmosphereLayer
+// Initialize AtmosphereLayer and expose handle on window for DevTools RTC/debug inspection
 const atmosphere = new AtmosphereLayer({ mapExtent: 1200, maxSteps: 36 });
 atmosphere.init(renderer, atmosphereScene);
 atmosphere.setSceneDepthTexture(depthTexture);
 atmosphere.resize(drawingSize.x, drawingSize.y);
+window.atmosphereLayer = atmosphere;
 
 // Lighting for maritime terrain & surface vessels
 const sunLight = new THREE.DirectionalLight(0xfff3dc, 2.6);
@@ -65,7 +66,7 @@ baseScene.add(sunLight);
 const hemiLight = new THREE.HemisphereLight(0x8ec5fc, 0x0b253a, 1.05);
 baseScene.add(hemiLight);
 
-// 1. Ocean Surface with Projected Drifting Cloud Shadows
+// 1. Ocean Surface with RTC-Synchronized Drifting Cloud Shadows
 const sharedCloudUniforms = atmosphere.getSharedGroundUniforms();
 const oceanGeo = new THREE.PlaneGeometry(1400, 1400, 1, 1);
 oceanGeo.rotateX(-Math.PI / 2);
@@ -76,13 +77,14 @@ const oceanMat = new THREE.MeshStandardMaterial({
   metalness: 0.65,
 });
 
-// Inject analytical ripples + cloud shadow projection onto y = uCloudMinY
+// Inject analytical ripples + RTC-aware cloud shadow projection onto y = uCloudMinY
 oceanMat.onBeforeCompile = (shader) => {
   shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
   shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
   shader.uniforms.uBoundsMinAndFade = sharedCloudUniforms.uBoundsMinAndFade;
   shader.uniforms.uBoundsMaxAndCoverage = sharedCloudUniforms.uBoundsMaxAndCoverage;
   shader.uniforms.uSunDirAndElevation = sharedCloudUniforms.uSunDirAndElevation;
+  shader.uniforms.uWorldOriginOffset = sharedCloudUniforms.uWorldOriginOffset;
 
   shader.vertexShader = shader.vertexShader
     .replace(
@@ -105,7 +107,8 @@ oceanMat.onBeforeCompile = (shader) => {
        uniform vec4 uWindAndTime;
        uniform vec4 uBoundsMinAndFade;
        uniform vec4 uBoundsMaxAndCoverage;
-       uniform vec4 uSunDirAndElevation;`
+       uniform vec4 uSunDirAndElevation;
+       uniform vec4 uWorldOriginOffset;`
     )
     .replace(
       '#include <dithering_fragment>',
@@ -113,7 +116,7 @@ oceanMat.onBeforeCompile = (shader) => {
        // Project ocean point along sun ray onto cloud base plane (y = uBoundsMinAndFade.y)
        vec3 sunDir = normalize(uSunDirAndElevation.xyz);
        float tCloudPlane = max((uBoundsMinAndFade.y - vOceanWorldPos.y) / max(sunDir.y, 0.08), 0.0);
-       vec2 shadowWorldXZ = vOceanWorldPos.xz + sunDir.xz * tCloudPlane;
+       vec2 shadowWorldXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
 
        vec2 boxMinXZ = uBoundsMinAndFade.xz;
        vec2 boxSizeXZ = uBoundsMaxAndCoverage.xz - boxMinXZ;
@@ -127,9 +130,10 @@ oceanMat.onBeforeCompile = (shader) => {
          weatherCov
        );
 
-       // Subtle procedural wave shimmer
-       float wave = sin(vOceanWorldPos.x * 0.18 + uWindAndTime.z * 1.8) *
-                    cos(vOceanWorldPos.z * 0.18 - uWindAndTime.z * 1.4);
+       // Subtle procedural wave shimmer anchored to RTC world coordinates
+       vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
+       float wave = sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) *
+                    cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
        gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * wave;
 
        // Apply soft cloud shadow darkening on water surface
@@ -357,18 +361,55 @@ window.addEventListener('resize', () => {
   atmosphere.resize(drawingSize.x, drawingSize.y);
 });
 
-// Main render loop with rolling FPS & isolated GPU pass timing
+// Main render loop state & WebGL2 context loss/recovery lifecycle
 const startTime = performance.now();
 let lastFrameTime = startTime;
 let frameCount = 0;
 let fpsAccumTime = 0;
+let isContextLost = false;
+let rafId = null;
 
 const elFps = document.getElementById('stat-fps');
 const elGpu = document.getElementById('stat-gpu');
 const elCalls = document.getElementById('stat-calls');
 
+canvas.addEventListener(
+  'webglcontextlost',
+  (event) => {
+    event.preventDefault();
+    isContextLost = true;
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    atmosphere.onContextLost();
+    elFps.textContent = 'CTX LOST';
+    elGpu.textContent = '-- ms';
+  },
+  false
+);
+
+canvas.addEventListener(
+  'webglcontextrestored',
+  () => {
+    isContextLost = false;
+    renderer.getDrawingBufferSize(drawingSize);
+    sceneTarget.setSize(drawingSize.x, drawingSize.y);
+
+    atmosphere.onContextRestored(renderer);
+    atmosphere.setSceneDepthTexture(depthTexture);
+    atmosphere.resize(drawingSize.x, drawingSize.y);
+    syncSceneLighting();
+
+    lastFrameTime = performance.now();
+    rafId = requestAnimationFrame(animate);
+  },
+  false
+);
+
 function animate(now) {
-  requestAnimationFrame(animate);
+  if (isContextLost) return;
+  rafId = requestAnimationFrame(animate);
 
   const dt = (now - lastFrameTime) * 0.001;
   lastFrameTime = now;
@@ -423,4 +464,4 @@ function animate(now) {
   }
 }
 
-requestAnimationFrame(animate);
+rafId = requestAnimationFrame(animate);
