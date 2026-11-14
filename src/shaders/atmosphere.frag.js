@@ -1,7 +1,11 @@
 /**
- * Custom #version 300 es volumetric cloud & precipitation fragment shader.
+ * Custom #version 300 es volumetric cloud, topographic airflow & precipitation fragment shader.
  * Features:
  * - Analytical Ray-AABB intersection
+ * - 3D Topographic Air-Land Interaction (uTerrainMap):
+ *   - Potential-flow streamline deflection around mountain flanks & into canyon gorges
+ *   - Orographic updraft lift over windward slopes + leeward wake turbulence
+ *   - 3D solid-landmass obstacle exclusion (clouds wrap around & over peaks, never through rock)
  * - All 10 WMO cloud genera profiles (Cumulus, Stratus, Stratocumulus, Altocumulus,
  *   Altostratus, Nimbostratus, Cirrus, Cirrocumulus, Cirrostratus, Cumulonimbus)
  * - Volumetric sub-cloud rain shafts (virga / precipitation columns)
@@ -38,9 +42,11 @@ uniform sampler3D uMacroNoise;
 uniform sampler3D uDetailNoise;
 uniform sampler2D uWeatherMap;
 uniform sampler2D uBlueNoise;
+uniform sampler2D uTerrainMap;       // R: height/380m, G: dH/dx [0..1], B: dH/dz [0..1], A: canyonFunnelMask
 uniform sampler2D uSceneDepth;
 
 const float PI = 3.14159265359;
+const float TERRAIN_MAX_NORM_H = 380.0;
 
 vec2 intersectAABB(vec3 rayOrigin, vec3 rayDir, vec3 boxMin, vec3 boxMax) {
   vec3 invDir = 1.0 / rayDir;
@@ -75,6 +81,66 @@ float dualLobePhase(float cosTheta) {
 
 float remap(float val, float low1, float high1, float low2, float high2) {
   return low2 + (val - low1) * (high2 - low2) / max(high1 - low1, 0.0001);
+}
+
+/**
+ * Evaluates 3D topographic air-land interaction at worldPos:
+ * - Solid landmass exclusion (clouds cannot exist inside rock)
+ * - Potential-flow horizontal deflection around mountain flanks & funneling into gorges
+ * - Orographic vertical lift over windward ridges + windward condensation / leeward dissipation
+ */
+void evaluateTopographicAirflow(
+  vec3 worldPos,
+  vec3 boxMin,
+  vec3 boxSize,
+  out float outTerrainY,
+  out float outClearanceMask,
+  out vec2 outFlowOffsetXZ,
+  out float outOrographicLiftY,
+  out float outOrographicMod
+) {
+  vec2 terrainUV = clamp((worldPos.xz - boxMin.xz) / boxSize.xz, 0.002, 0.998);
+  vec4 tSample = texture(uTerrainMap, terrainUV);
+
+  outTerrainY = tSample.r * TERRAIN_MAX_NORM_H;
+  vec2 gradXZ = (tSample.gb - 0.5) * 2.0; // Normalized terrain slope gradient (points uphill)
+  float canyonMask = tSample.a;           // 1.0 in flooded gorges, 0.0 on ridges
+
+  // 1. 3D Solid-landmass obstacle exclusion: zero density inside rock, smooth boundary cushion above slope
+  outClearanceMask = smoothstep(outTerrainY + 1.0, outTerrainY + 20.0, worldPos.y);
+
+  // Height of air parcel relative to local mountain terrain
+  float altAboveTerrain = max(worldPos.y - outTerrainY, 0.0);
+  float interactionZone = 1.0 - smoothstep(0.0, 135.0, altAboveTerrain);
+
+  // Wind direction unit vector
+  float windLen = length(uWindAndTime.xy);
+  vec2 windDir = windLen > 0.01 ? (uWindAndTime.xy / windLen) : vec2(0.848, 0.530);
+
+  // Uphill wind component: positive when air blows directly up a windward mountain slope
+  float uphillAlignment = dot(windDir, gradXZ);
+
+  // 2. Orographic vertical lift: air parcel is pushed upward over high terrain & windward slopes
+  float baseRidgeLift = clamp(outTerrainY - boxMin.y * 0.45, 0.0, 95.0) * 0.48;
+  float windwardUpdraft = max(uphillAlignment, 0.0) * 34.0;
+  outOrographicLiftY = (baseRidgeLift + windwardUpdraft) * interactionZone;
+
+  // 3. Horizontal potential-flow streamline deflection around mountain massifs & into gorges:
+  //    - Air is pushed away from steep mountain slopes (-gradXZ)
+  //    - Air swirls tangentially around peak flanks (perpGrad)
+  //    - Air accelerates along low-resistance canyon gorge channels (canyonMask)
+  vec2 perpGrad = vec2(-gradXZ.y, gradXZ.x);
+  float tangentSign = sign(dot(windDir, perpGrad) + 0.001);
+  float blockStrength = smoothstep(25.0, 180.0, outTerrainY) * interactionZone;
+
+  vec2 slopeRepulsion = -gradXZ * (78.0 * blockStrength);
+  vec2 flankStream = perpGrad * tangentSign * (56.0 * blockStrength);
+  vec2 canyonJet = windDir * (canyonMask * 42.0 * (1.0 - smoothstep(40.0, 195.0, worldPos.y)));
+
+  outFlowOffsetXZ = slopeRepulsion + flankStream + canyonJet;
+
+  // 4. Orographic condensation on windward crests & slight Foehn dissipation in leeward shadow
+  outOrographicMod = clamp(uphillAlignment * 0.32 * interactionZone, -0.18, 0.28);
 }
 
 // Compute genus-specific vertical profile for all 10 WMO cloud genera (0..9)
@@ -130,52 +196,73 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
                    (1.0 - smoothstep(0.82, 1.0, normXZ.y));
   if (edgeMask <= 0.001) return 0.0;
 
-  // Apply Relative-To-Center (RTC) floating-origin offset
-  vec2 globalXZ = worldPos.xz + uWorldOriginOffset.xy;
+  // Evaluate 3D topographic air-land interaction (deflection around mountains, funneling into canyons, orographic lift)
+  float terrainY = 0.0;
+  float clearanceMask = 1.0;
+  vec2 flowOffsetXZ = vec2(0.0);
+  float orographicLiftY = 0.0;
+  float orographicMod = 0.0;
+
+  evaluateTopographicAirflow(
+    worldPos,
+    boxMin,
+    boxSize,
+    terrainY,
+    clearanceMask,
+    flowOffsetXZ,
+    orographicLiftY,
+    orographicMod
+  );
+
+  // Reject immediately if sample point is inside solid mountain rock
+  if (clearanceMask <= 0.001) return 0.0;
+
+  // Apply Relative-To-Center (RTC) floating-origin offset + topographic streamline deflection
+  vec2 globalXZ = worldPos.xz + uWorldOriginOffset.xy + flowOffsetXZ;
   vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
 
   int genusId = int(uDebugParams.y + 0.5);
   float rainIntensity = uDebugParams.z;
   float densityMult = uDebugParams.w;
 
-  // Weather map lookup
+  // Effective altitude after orographic lift over mountain ridges
+  float liftedY = worldPos.y - orographicLiftY;
+
+  // Weather map lookup along deflected air streamlines
   float weatherFreq = (genusId == 3 || genusId == 7) ? 1.45 : 1.0;
   vec2 weatherUV = ((globalXZ - boxMin.xz) / boxSize.xz) * weatherFreq + windOffset * 0.00085;
   vec3 weather = texture(uWeatherMap, weatherUV).rgb;
 
-  // Sub-cloud volumetric rain shafts (virga / precipitation curtains below cloud base)
-  if (worldPos.y < boxMin.y) {
-    if (rainIntensity <= 0.01 || worldPos.y < 0.0) return 0.0;
-    float subH = clamp(worldPos.y / max(boxMin.y, 1.0), 0.0, 1.0);
-    // Rain falls beneath dense cloud cores with wind shear tilt
-    vec2 shearXZ = globalXZ + uWindAndTime.xy * (boxMin.y - worldPos.y) * 0.06;
+  // Sub-cloud volumetric rain shafts (virga / precipitation curtains below cloud base, blocked by terrain)
+  if (liftedY < boxMin.y) {
+    if (rainIntensity <= 0.01 || worldPos.y < terrainY) return 0.0;
+    float subH = clamp((worldPos.y - terrainY) / max(boxMin.y - terrainY, 10.0), 0.0, 1.0);
+    vec2 shearXZ = globalXZ + uWindAndTime.xy * (boxMin.y - liftedY) * 0.06;
     vec2 rainUV = (shearXZ - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
     float coreCov = texture(uWeatherMap, rainUV).r;
     float shaftMask = smoothstep(0.45, 0.82, coreCov * uBoundsMaxAndCoverage.w * 1.5);
     if (shaftMask > 0.01) {
-      // Vertical rain streak curtains
       vec3 streakUVW = vec3(shearXZ.x * 0.009, worldPos.y * 0.002 + uWindAndTime.z * 0.45, shearXZ.y * 0.009);
       float streakNoise = texture(uDetailNoise, streakUVW).r;
-      outRainShaft = shaftMask * (0.45 + 0.55 * streakNoise) * rainIntensity * edgeMask * smoothstep(0.0, 0.15, subH);
+      outRainShaft = shaftMask * (0.45 + 0.55 * streakNoise) * rainIntensity * edgeMask * clearanceMask * smoothstep(0.0, 0.12, subH);
     }
     return 0.0;
   }
 
-  // Normalized altitude [0..1] inside cloud slab
-  float h = clamp((worldPos.y - boxMin.y) / boxSize.y, 0.0, 1.0);
+  // Normalized altitude [0..1] inside cloud slab (using liftedY so clouds arch over windward peaks)
+  float h = clamp((liftedY - boxMin.y) / boxSize.y, 0.0, 1.0);
+  if (liftedY > boxMax.y) return 0.0;
 
-  // Modulate coverage by weather map and user coverage slider
+  // Modulate coverage by weather map, user coverage slider, and windward orographic condensation
   float coverageBoost = 1.62;
   if (genusId == 1 || genusId == 4 || genusId == 5 || genusId == 8) {
-    // Stratiform sheets fill horizontal sky more uniformly
     weather.r = mix(weather.r, 0.78, 0.55);
   } else if (genusId == 9 && h > 0.68) {
-    // Cumulonimbus anvil spreads horizontally at upper altitudes
     weather.r = max(weather.r, weather.b * 0.92);
     coverageBoost = 1.85;
   }
 
-  float localCoverage = clamp(weather.r * (uBoundsMaxAndCoverage.w * coverageBoost), 0.0, 1.0);
+  float localCoverage = clamp(weather.r * (uBoundsMaxAndCoverage.w * coverageBoost) + orographicMod, 0.0, 1.0);
   if (localCoverage <= 0.03) return 0.0;
 
   float heightProfile = computeGenusHeightProfile(genusId, h, weather);
@@ -189,14 +276,13 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   float vertStretch = uCloudShapeParams.y;
   float cellularity = uCloudShapeParams.z;
 
-  // Macro 3D Perlin-Worley FBM lookup
+  // Macro 3D Perlin-Worley FBM lookup using deflected XZ and orographically lifted Y
   vec3 macroUVW = vec3(
     shearedXZ.x * horizScale,
-    worldPos.y * vertStretch,
+    liftedY * vertStretch,
     shearedXZ.y * horizScale
   ) * 0.0024;
 
-  // Cirrus & Cirrostratus anisotropic stretching along wind direction
   if (genusId == 6) {
     macroUVW.x *= 0.42;
     macroUVW.z *= 1.85;
@@ -205,28 +291,26 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   vec4 macro = texture(uMacroNoise, macroUVW);
   float worleyFbm = macro.g * 0.625 + macro.b * 0.25 + macro.a * 0.125;
 
-  // Blend between smooth stratiform Perlin sheets and cellular cumuliform Worley puffs
   float RemapLow = mix(-0.35, -(1.0 - worleyFbm) * 0.75, cellularity);
   float baseShape = remap(mix(macro.r, worleyFbm, cellularity * 0.42), RemapLow, 1.0, 0.0, 1.0);
 
-  // For Cirrocumulus / Altocumulus mackerel ripples, emphasize cellular Worley separation
   if (genusId == 3 || genusId == 7) {
     float ripple = sin(shearedXZ.x * 0.045 + macro.g * 3.5) * 0.5 + 0.5;
     baseShape *= mix(0.68, 1.18, ripple * worleyFbm);
   }
 
   float baseDensity = remap(baseShape * heightProfile, 1.0 - localCoverage, 1.0, 0.0, 1.0);
-  baseDensity = clamp(baseDensity, 0.0, 1.0) * edgeMask;
+  baseDensity = clamp(baseDensity, 0.0, 1.0) * edgeMask * clearanceMask;
 
   if (!highDetail || baseDensity <= 0.001) {
     return baseDensity * densityMult;
   }
 
-  // High-frequency Worley detail erosion at cloud boundaries for crisp cauliflower edges
+  // High-frequency Worley detail erosion (with extra wake curl near mountain ridges)
   float detailFreq = (genusId == 6 || genusId == 7) ? 0.016 : 0.0115;
   vec3 detailUVW = vec3(
     shearedXZ.x * 1.35,
-    worldPos.y + uWindAndTime.z * 1.5,
+    liftedY + uWindAndTime.z * 1.5,
     shearedXZ.y * 1.35
   ) * detailFreq;
 
@@ -244,23 +328,21 @@ float marchSunTransmittance(vec3 samplePos, vec3 sunDir) {
   float opticalDepth = 0.0;
   vec3 pos = samplePos;
   float dummyRain = 0.0;
+  float maxSlabTop = uBoundsMaxAndCoverage.y + 65.0;
 
   for (int i = 0; i < 5; i++) {
     pos += sunDir * stepLen;
-    if (pos.y > uBoundsMaxAndCoverage.y) break;
+    if (pos.y > maxSlabTop) break;
     float d = sampleCloudDensity(pos, false, dummyRain);
     opticalDepth += d * stepLen;
     stepLen *= 1.38;
   }
 
   float extinction = uWindAndTime.w;
-  // Multi-octave scattering approximation (Wrenninge / Schneider): allows deep cloud interiors
-  // to retain luminous silver linings while preserving rich self-shadowed undersides
   float beerPrimary = exp(-opticalDepth * extinction);
   float beerSecondary = exp(-opticalDepth * extinction * 0.28) * 0.72;
   float beer = max(beerPrimary, beerSecondary);
 
-  // Powder-sugar edge effect highlights billowy cumulus rims facing the viewer
   float powder = 1.0 - exp(-opticalDepth * extinction * 2.4);
   return mix(beer, beer * (0.52 + 0.88 * powder), 0.68);
 }
@@ -272,17 +354,18 @@ void main() {
   // Prevent division-by-zero on axis-aligned rays
   vec3 safeRayDir = mix(rayDir, vec3(1e-5), lessThan(abs(rayDir), vec3(1e-5)));
 
-  // Expand bottom of raymarch box to y=0 when rain is active so sub-cloud virga shafts render
+  // Expand raymarch box to include +65m orographic lift headroom above peaks and down to y=0 when raining
   vec3 marchBoxMin = uBoundsMinAndFade.xyz;
   if (uDebugParams.z > 0.01) {
     marchBoxMin.y = 0.0;
   }
+  vec3 marchBoxMax = uBoundsMaxAndCoverage.xyz + vec3(0.0, 65.0, 0.0);
 
   vec2 hit = intersectAABB(
     rayOrigin,
     safeRayDir,
     marchBoxMin,
-    uBoundsMaxAndCoverage.xyz
+    marchBoxMax
   );
 
   float tNear = hit.x;
@@ -312,9 +395,9 @@ void main() {
     return;
   }
 
-  // Debug Mode 3: Horizontal 3D Noise Volume Slice at mid-cloud altitude
+  // Debug Mode 3: Horizontal 3D Noise & Topographic Airflow Slice at mid-cloud altitude
   if (debugMode == 3) {
-    float sliceY = mix(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, 0.42);
+    float sliceY = mix(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, 0.35);
     float denomY = abs(rayDir.y) > 1e-4 ? rayDir.y : (rayDir.y >= 0.0 ? 1e-4 : -1e-4);
     float tSlice = (sliceY - rayOrigin.y) / denomY;
     float tSample = tSlice > 0.0 ? min(tSlice, tScene) : max(tNear, 60.0);
@@ -329,12 +412,36 @@ void main() {
       discard;
     }
 
-    vec2 globalSliceXZ = slicePos.xz + uWorldOriginOffset.xy;
+    float terrainY = 0.0;
+    float clearanceMask = 1.0;
+    vec2 flowOffsetXZ = vec2(0.0);
+    float orographicLiftY = 0.0;
+    float orographicMod = 0.0;
+    evaluateTopographicAirflow(
+      slicePos,
+      uBoundsMinAndFade.xyz,
+      uBoundsMaxAndCoverage.xyz - uBoundsMinAndFade.xyz,
+      terrainY,
+      clearanceMask,
+      flowOffsetXZ,
+      orographicLiftY,
+      orographicMod
+    );
+
+    // Highlight solid mountain peaks intersecting the horizontal slice
+    if (slicePos.y < terrainY + 2.0) {
+      float rockRim = smoothstep(terrainY - 12.0, terrainY + 2.0, slicePos.y);
+      vec3 rockCol = mix(vec3(0.14, 0.16, 0.20), vec3(1.0, 0.68, 0.20), rockRim);
+      fragColor = vec4(rockCol, 0.94);
+      return;
+    }
+
+    vec2 globalSliceXZ = slicePos.xz + uWorldOriginOffset.xy + flowOffsetXZ;
     vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
-    vec3 macroUVW = vec3(globalSliceXZ.x + windOffset.x, slicePos.y, globalSliceXZ.y + windOffset.y) * 0.0024;
+    vec3 macroUVW = vec3(globalSliceXZ.x + windOffset.x, slicePos.y - orographicLiftY, globalSliceXZ.y + windOffset.y) * 0.0024;
     vec3 detailUVW = vec3(
       globalSliceXZ.x + windOffset.x * 1.35,
-      slicePos.y + uWindAndTime.z * 1.5,
+      slicePos.y - orographicLiftY + uWindAndTime.z * 1.5,
       globalSliceXZ.y + windOffset.y * 1.35
     ) * 0.011;
 
