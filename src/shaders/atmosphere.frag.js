@@ -3,6 +3,7 @@
  * Features:
  * - Analytical Ray-AABB intersection
  * - Off-axis radial ray distance (tScene) depth compositing + soft terrain feathering
+ * - Relative-To-Center (RTC) floating-origin world offset (uWorldOriginOffset)
  * - Blue-noise start jitter + adaptive empty-space stride skipping
  * - Beer-Lambert extinction, 4-step sun self-shadowing + powder edge term
  * - Dual-lobe Henyey-Greenstein scattering + horizon aerial perspective
@@ -27,6 +28,7 @@ uniform vec4 uCameraPosAndSteps;     // xyz: cameraWorldPos, w: maxPrimarySteps
 uniform vec4 uCameraForwardAndNear;  // xyz: normalized cameraForward, w: cameraNear
 uniform vec4 uViewportAndFar;        // xy: viewportResolution, z: cameraFar, w: detailErosionStrength
 uniform vec4 uDebugParams;           // x: debugMode (0=Final, 1=Transmittance, 2=Depth, 3=NoiseSlice), yzw: reserved
+uniform vec4 uWorldOriginOffset;     // xy: floating-origin RTC offset XZ (meters), zw: reserved
 
 uniform sampler3D uMacroNoise;
 uniform sampler3D uDetailNoise;
@@ -42,8 +44,8 @@ vec2 intersectAABB(vec3 rayOrigin, vec3 rayDir, vec3 boxMin, vec3 boxMax) {
   vec3 t1 = (boxMax - rayOrigin) * invDir;
   vec3 tSmaller = min(t0, t1);
   vec3 tBigger  = max(t0, t1);
-  float tNear = max(max(tSmaller.x, tSmaller.y), max(tSmaller.z, 0.0));
-  float tFar  = min(min(tBigger.x, tBigger.y), tBigger.z);
+  float tNear = max(max(tsmaller.x, tsmaller.y), max(tsmaller.z, 0.0));
+  float tFar  = min(min(tbigger.x, tbigger.y), tbigger.z);
   return vec2(tNear, tFar);
 }
 
@@ -76,18 +78,21 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail) {
   vec3 boxMax = uBoundsMaxAndCoverage.xyz;
   vec3 boxSize = boxMax - boxMin;
 
-  // Normalized altitude [0..1] inside cloud slab
+  // Normalized altitude [0..1] inside local cloud slab
   float h = clamp((worldPos.y - boxMin.y) / boxSize.y, 0.0, 1.0);
 
-  // Smooth horizontal edge feathering prevents hard AABB box cutoffs at low pitch
+  // Smooth horizontal edge feathering in local camera-centered slab prevents AABB seams
   vec2 normXZ = abs((worldPos.xz - 0.5 * (boxMin.xz + boxMax.xz)) / (0.5 * boxSize.xz));
   float edgeMask = (1.0 - smoothstep(0.84, 1.0, normXZ.x)) *
                    (1.0 - smoothstep(0.84, 1.0, normXZ.y));
   if (edgeMask <= 0.001) return 0.0;
 
+  // Apply Relative-To-Center (RTC) floating-origin offset for jitter-free regional coordinates
+  vec2 globalXZ = worldPos.xz + uWorldOriginOffset.xy;
+
   // 2D Weather map lookup with wind advection
   vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
-  vec2 weatherUV = (worldPos.xz - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
+  vec2 weatherUV = (globalXZ - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
   vec2 weather = texture(uWeatherMap, weatherUV).rg;
 
   // Modulate coverage by weather map and user coverage control
@@ -102,7 +107,7 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail) {
   if (heightProfile <= 0.001) return 0.0;
 
   // Macro 3D Perlin-Worley FBM lookup
-  vec3 macroUVW = (worldPos + vec3(windOffset.x, 0.0, windOffset.y)) * 0.0024;
+  vec3 macroUVW = vec3(globalXZ.x + windOffset.x, worldPos.y, globalXZ.y + windOffset.y) * 0.0024;
   vec4 macro = texture(uMacroNoise, macroUVW);
   float worleyFbm = macro.g * 0.625 + macro.b * 0.25 + macro.a * 0.125;
   float baseShape = remap(macro.r, -(1.0 - worleyFbm) * 0.65, 1.0, 0.0, 1.0);
@@ -115,7 +120,11 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail) {
   }
 
   // High-frequency Worley detail erosion at cloud boundaries
-  vec3 detailUVW = (worldPos + vec3(windOffset.x * 1.35, uWindAndTime.z * 1.5, windOffset.y * 1.35)) * 0.011;
+  vec3 detailUVW = vec3(
+    globalXZ.x + windOffset.x * 1.35,
+    worldPos.y + uWindAndTime.z * 1.5,
+    globalXZ.y + windOffset.y * 1.35
+  ) * 0.011;
   vec3 detail = texture(uDetailNoise, detailUVW).rgb;
   float detailFbm = detail.r * 0.625 + detail.g * 0.25 + detail.b * 0.125;
   float detailModifier = mix(detailFbm, 1.0 - detailFbm, clamp(h * 2.5, 0.0, 1.0));
@@ -202,9 +211,14 @@ void main() {
       discard;
     }
 
+    vec2 globalSliceXZ = slicePos.xz + uWorldOriginOffset.xy;
     vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
-    vec3 macroUVW = (slicePos + vec3(windOffset.x, 0.0, windOffset.y)) * 0.0024;
-    vec3 detailUVW = (slicePos + vec3(windOffset.x * 1.35, uWindAndTime.z * 1.5, windOffset.y * 1.35)) * 0.011;
+    vec3 macroUVW = vec3(globalSliceXZ.x + windOffset.x, slicePos.y, globalSliceXZ.y + windOffset.y) * 0.0024;
+    vec3 detailUVW = vec3(
+      globalSliceXZ.x + windOffset.x * 1.35,
+      slicePos.y + uWindAndTime.z * 1.5,
+      globalSliceXZ.y + windOffset.y * 1.35
+    ) * 0.011;
 
     vec4 macro = texture(uMacroNoise, macroUVW);
     vec3 detail = texture(uDetailNoise, detailUVW).rgb;
@@ -307,7 +321,7 @@ void main() {
     t += stepSize;
   }
 
-  // Debug Mode 1: Optical Transmittance T in [0..1] (coral tint marks T <= 0.01 early-out cores)
+  // Debug Mode 1: Optical Transmittance T in [0..1] (coral tint marks T <= 0.012 early-out cores)
   if (debugMode == 1) {
     vec3 transVis = vec3(transmittance);
     if (transmittance <= 0.012) {
