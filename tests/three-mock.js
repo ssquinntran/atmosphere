@@ -161,6 +161,10 @@ export class ConeGeometry extends BufferGeometry {
   constructor(r = 1, h = 1, s = 4) { super(); this.r = r; this.h = h; this.s = s; }
 }
 
+export class CylinderGeometry extends BufferGeometry {
+  constructor(rt = 1, rb = 1, h = 1, s = 8) { super(); this.rt = rt; this.rb = rb; this.h = h; this.s = s; }
+}
+
 export class SphereGeometry extends BufferGeometry {
   constructor(r = 1, ws = 8, hs = 8) { super(); this.r = r; this.ws = ws; this.hs = hs; }
 }

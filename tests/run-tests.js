@@ -498,10 +498,19 @@ async function runAllSuites() {
 
     for (const [id, val] of [
       ['ctrl-coverage', '0.78'], ['ctrl-density', '2.20'], ['ctrl-rain', '0.75'],
-      ['ctrl-lightning', '0.85'], ['ctrl-fog', '0.60'], ['ctrl-base', '110'],
-      ['ctrl-sun', '42'], ['ctrl-wind', '24'], ['ctrl-steps', '56'],
+      ['ctrl-lightning', '0.85'], ['ctrl-fog', '0.60'], ['ctrl-temp', '-20'],
+      ['ctrl-temp', '0'], ['ctrl-temp', '28'], ['ctrl-temp', '40'], ['ctrl-temp', '18'],
+      ['ctrl-base', '110'], ['ctrl-sun', '42'], ['ctrl-wind', '24'], ['ctrl-steps', '56'],
     ]) {
       fireInput(id, val);
+      if (id === 'ctrl-temp' && val === '-20') {
+        const cv = globalThis.document.getElementById('ctrl-camera-view');
+        cv.value = 'santa';
+        cv.dispatchEvent({ type: 'change', target: cv });
+        domEnv.stepAnimationFrame(35.0);
+        domEnv.stepAnimationFrame(35.0);
+      }
+      if (id === 'ctrl-temp' && val === '0') domEnv.stepAnimationFrame(35.0);
     }
 
     const ctrlCameraView = globalThis.document.getElementById('ctrl-camera-view');
@@ -539,7 +548,7 @@ async function runAllSuites() {
     for (let f = 0; f < 12; f++) domEnv.stepAnimationFrame(2500.0);
   });
 
-  await runTest('Front-End Unit: index.html Markup & DOM Schema Contract', 'Validates importmap, canvas, 10 WMO genus options, 17 sliders & telemetry badges', () => {
+  await runTest('Front-End Unit: index.html Markup & DOM Schema Contract', 'Validates importmap, canvas, 10 WMO genus options, 18 sliders & telemetry badges', () => {
     const html = fs.readFileSync(path.resolve(projectRoot, 'index.html'), 'utf8');
     assert.ok(html.includes('<script type="importmap">'));
     assert.ok(html.includes('three@0.187.0/build/three.module.js'));
