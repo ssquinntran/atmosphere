@@ -82,8 +82,10 @@ export function setupMockBrowserEnvironment() {
 
   // Create all HUD elements referenced by index.html & src/main.js
   createMockElement('viewport', 'CANVAS');
+  createMockElement('ctrl-storm', 'SELECT');
   createMockElement('ctrl-genus', 'SELECT');
   createMockElement('ctrl-tornado', 'INPUT');
+  createMockElement('ctrl-hurricane', 'INPUT');
   createMockElement('ctrl-tsunami', 'INPUT');
   createMockElement('ctrl-whirlpool', 'INPUT');
   createMockElement('ctrl-tide', 'INPUT');
@@ -100,6 +102,7 @@ export function setupMockBrowserEnvironment() {
   createMockElement('ctrl-debug', 'SELECT');
 
   createMockElement('val-tornado', 'SPAN');
+  createMockElement('val-hurricane', 'SPAN');
   createMockElement('val-tsunami', 'SPAN');
   createMockElement('val-whirlpool', 'SPAN');
   createMockElement('val-tide', 'SPAN');
@@ -121,7 +124,7 @@ export function setupMockBrowserEnvironment() {
   createMockElement('stat-clusters', 'DIV');
   createMockElement('stat-topology', 'DIV');
 
-  for (const presetName of ['tradeWinds', 'clearPatrol', 'squall']) {
+  for (const presetName of ['tradeWinds', 'clearPatrol', 'squall', 'hurricane']) {
     const btn = createMockElement(`btn-${presetName}`, 'BUTTON');
     btn.dataset.preset = presetName;
     if (presetName === 'tradeWinds') btn.classList.add('active');
@@ -352,6 +355,7 @@ async function runAllSuites() {
   const {
     AtmosphereLayer,
     CLOUD_GENERA,
+    STORM_TYPES,
     WEATHER_PRESETS,
     DEBUG_MODES,
   } = await import('../src/layers/AtmosphereLayer.js');
@@ -497,6 +501,7 @@ async function runAllSuites() {
         windVecXZ: { x: 12.0, y: 8.0 },
         tornadoStrength: 0.9,
         tornadoCenterXZ: { x: 0.0, y: 0.0 },
+        hurricaneStrength: 0.9,
         whirlpoolStrength: 0.85,
         whirlpoolCenterXZ: { x: 0.0, y: -10.0 },
         tsunamiStrength: 0.9,
@@ -557,6 +562,7 @@ async function runAllSuites() {
 
     // Calling methods before init() should safely no-op without throwing
     rawLayer.applyPreset('tradeWinds');
+    rawLayer.setStormType('hurricane');
     rawLayer.setWorldOriginOffset(100, -200);
     rawLayer.setSceneDepthTexture(null);
     rawLayer.setDebugMode('transmittance');
@@ -584,6 +590,14 @@ async function runAllSuites() {
       assert.strictEqual(layer.state.cloudGenusId, CLOUD_GENERA[genusKey].id);
     }
     layer.setCloudGenus('nonExistentGenus');
+
+    // Test all 6 storm regimes + invalid storm guard
+    for (const stormKey of Object.keys(STORM_TYPES)) {
+      layer.setStormType(stormKey);
+      assert.strictEqual(layer.state.stormType, stormKey);
+      assert.strictEqual(layer.state.stormTypeId, STORM_TYPES[stormKey].id);
+    }
+    layer.setStormType('nonExistentStorm');
 
     // Test all presets + invalid preset guard
     for (const presetKey of Object.keys(WEATHER_PRESETS)) {
@@ -673,7 +687,14 @@ async function runAllSuites() {
       domEnv.stepAnimationFrame(35.0);
     }
 
-    // 2. Select all 10 WMO Cloud Genera via #ctrl-genus
+    // 2. Select all 6 Storm Regimes via #ctrl-storm & all 10 WMO Cloud Genera via #ctrl-genus
+    const ctrlStorm = globalThis.document.getElementById('ctrl-storm');
+    for (const stormKey of Object.keys(STORM_TYPES)) {
+      ctrlStorm.value = stormKey;
+      ctrlStorm.dispatchEvent({ type: 'change', target: ctrlStorm });
+      domEnv.stepAnimationFrame(25.0);
+    }
+
     const ctrlGenus = globalThis.document.getElementById('ctrl-genus');
     for (const genusKey of Object.keys(CLOUD_GENERA)) {
       ctrlGenus.value = genusKey;
@@ -681,10 +702,17 @@ async function runAllSuites() {
       domEnv.stepAnimationFrame(25.0);
     }
 
-    // 3. Test Tornado, Tsunami, Whirlpool, and all 4 Tide regimes (Low, Mean, High, King)
+    // 3. Test Tornado, Hurricane, Tsunami, Whirlpool, and all 4 Tide regimes (Low, Mean, High, King)
     const ctrlTornado = globalThis.document.getElementById('ctrl-tornado');
     ctrlTornado.value = '0.90';
     ctrlTornado.dispatchEvent({ type: 'input', target: ctrlTornado });
+
+    const ctrlHurricane = globalThis.document.getElementById('ctrl-hurricane');
+    ctrlHurricane.value = '0.92';
+    ctrlHurricane.dispatchEvent({ type: 'input', target: ctrlHurricane });
+    domEnv.stepAnimationFrame(25.0);
+    ctrlHurricane.value = '0.00';
+    ctrlHurricane.dispatchEvent({ type: 'input', target: ctrlHurricane });
 
     const ctrlTsunami = globalThis.document.getElementById('ctrl-tsunami');
     ctrlTsunami.value = '0.85';
@@ -747,6 +775,7 @@ async function runAllSuites() {
     globalThis.window.innerWidth = 1920;
     globalThis.window.innerHeight = 1080;
     globalThis.window.dispatchEvent({ type: 'resize' });
+
     const viewportCanvas = globalThis.document.getElementById('viewport');
     const savedRafCb = domEnv.getRafCallback();
     viewportCanvas.dispatchEvent({
@@ -769,6 +798,7 @@ async function runAllSuites() {
   });
 
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // SUITE 5: Front-End Unit Tests (HTML Markup Contract, Formatters & UI State)
   // -------------------------------------------------------------------------
   await runTest('Front-End Unit: index.html Markup & DOM Schema Contract', 'Validates importmap, canvas, 10 WMO genus options, 14 sliders & telemetry badges', () => {
@@ -780,9 +810,14 @@ async function runAllSuites() {
     assert.ok(html.includes('three@0.187.0/build/three.module.js'));
     assert.ok(html.includes('<canvas id="viewport"></canvas>'));
 
-    // Verify all 3 weather preset buttons
-    for (const preset of ['tradeWinds', 'clearPatrol', 'squall']) {
+    // Verify all 4 weather & storm preset buttons
+    for (const preset of ['tradeWinds', 'clearPatrol', 'squall', 'hurricane']) {
       assert.ok(html.includes(`data-preset="${preset}"`), `Missing preset button ${preset}`);
+    }
+
+    // Verify all 6 storm system option values in #ctrl-storm
+    for (const stormKey of Object.keys(STORM_TYPES)) {
+      assert.ok(html.includes(`<option value="${stormKey}"`), `Missing storm option ${stormKey}`);
     }
 
     // Verify all 10 WMO cloud genera option values in #ctrl-genus
@@ -790,9 +825,10 @@ async function runAllSuites() {
       assert.ok(html.includes(`<option value="${genusKey}"`), `Missing WMO option ${genusKey}`);
     }
 
-    // Verify all 14 range sliders and their readout value badges exist in index.html
+    // Verify all 15 range sliders and their readout value badges exist in index.html
     const requiredControls = [
       ['ctrl-tornado', 'val-tornado'],
+      ['ctrl-hurricane', 'val-hurricane'],
       ['ctrl-tsunami', 'val-tsunami'],
       ['ctrl-whirlpool', 'val-whirlpool'],
       ['ctrl-tide', 'val-tide'],
@@ -910,10 +946,11 @@ async function runAllSuites() {
     });
 
     // -----------------------------------------------------------------------
-    // PHASE 2: Rankine Tornado + Whirlpool Coalescence & Union-Find Experiment
+    // PHASE 2: Tornado vs. Category 5 Hurricane + Whirlpool DSU Coalescence
     // -----------------------------------------------------------------------
-    const measureParticleMetrics = (tornadoVal, whirlpoolVal, steps) => {
+    const measureParticleMetrics = (tornadoVal, hurricaneVal, whirlpoolVal, steps) => {
       hydroState.tornadoStrength = tornadoVal;
+      hydroState.hurricaneStrength = hurricaneVal;
       hydroState.whirlpoolStrength = whirlpoolVal;
       hydroState.tsunamiStrength = 0.0;
       atmosphere.setVortexAndTide(hydroState.tornadoX, hydroState.tornadoZ, tornadoVal, 0.0);
@@ -942,16 +979,17 @@ async function runAllSuites() {
       };
     };
 
-    const calmTrial = measureParticleMetrics(0.0, 0.0, 20);
-    const stormTrial = measureParticleMetrics(0.95, 0.90, 25);
+    const calmTrial = measureParticleMetrics(0.0, 0.0, 0.0, 20);
+    const stormTrial = measureParticleMetrics(0.95, 0.95, 0.90, 25);
+    hydroState.hurricaneStrength = 0.0;
 
-    assert.ok(stormTrial.meanSpeed > calmTrial.meanSpeed, 'Supercell tornado must increase mean parcel kinetic speed');
-    assert.ok(stormTrial.maxUpdraft > 20.0, 'Rankine tornado core must generate strong vertical updraft (>20 m/s)');
-    assert.ok(stormTrial.largestCluster >= 2, 'Union-Find must coalesce colliding vortex parcels into multi-particle eddies');
+    assert.ok(stormTrial.meanSpeed > calmTrial.meanSpeed, 'Tornado + Cat-5 Hurricane must increase mean parcel kinetic speed');
+    assert.ok(stormTrial.maxUpdraft > 20.0, 'Tornado & Hurricane eyewall must generate strong vertical updraft (>20 m/s)');
+    assert.ok(stormTrial.largestCluster >= 2, 'Union-Find must coalesce colliding storm parcels into multi-particle eddies');
 
     experimentRows.push({
-      phase: 'Phase 2: Rankine Vortex + DSU Coalescence',
-      condition: 'Calm (0%) -> Vortex (95%)',
+      phase: 'Phase 2: Tornado & Cat-5 Hurricane + DSU',
+      condition: 'Calm (0%) -> Tornado/Hurricane (95%)',
       metricA: `Speed: ${calmTrial.meanSpeed.toFixed(1)} -> ${stormTrial.meanSpeed.toFixed(1)} m/s (Updraft ${stormTrial.maxUpdraft.toFixed(1)} m/s)`,
       metricB: `DSU Clusters: ${stormTrial.activeClusters} (Max Eddy: ${stormTrial.largestCluster} parcels)`,
     });
