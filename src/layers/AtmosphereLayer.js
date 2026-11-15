@@ -159,6 +159,8 @@ export const STORM_TYPES = {
     coverage: 0.65,
     windSpeed: 14,
     rainIntensity: 0.0,
+    lightningIntensity: 0.0,
+    fogDensity: 0.22,
     tornadoStrength: 0.0,
     hurricaneStrength: 0.0,
     sunElevationDeg: 32,
@@ -174,6 +176,8 @@ export const STORM_TYPES = {
     coverage: 0.76,
     windSpeed: 22,
     rainIntensity: 0.48,
+    lightningIntensity: 0.35,
+    fogDensity: 0.38,
     tornadoStrength: 0.72,
     hurricaneStrength: 0.0,
     sunElevationDeg: 24,
@@ -189,6 +193,8 @@ export const STORM_TYPES = {
     coverage: 0.88,
     windSpeed: 30,
     rainIntensity: 0.92,
+    lightningIntensity: 0.95,
+    fogDensity: 0.55,
     tornadoStrength: 0.95,
     hurricaneStrength: 0.0,
     sunElevationDeg: 15,
@@ -204,6 +210,8 @@ export const STORM_TYPES = {
     coverage: 0.94,
     windSpeed: 38,
     rainIntensity: 0.96,
+    lightningIntensity: 0.85,
+    fogDensity: 0.65,
     tornadoStrength: 0.0,
     hurricaneStrength: 0.95,
     sunElevationDeg: 18,
@@ -219,6 +227,8 @@ export const STORM_TYPES = {
     coverage: 0.86,
     windSpeed: 36,
     rainIntensity: 0.88,
+    lightningIntensity: 0.90,
+    fogDensity: 0.50,
     tornadoStrength: 0.0,
     hurricaneStrength: 0.82,
     sunElevationDeg: 14,
@@ -234,6 +244,8 @@ export const STORM_TYPES = {
     coverage: 0.92,
     windSpeed: 33,
     rainIntensity: 0.86,
+    lightningIntensity: 0.45,
+    fogDensity: 0.72,
     tornadoStrength: 0.35,
     hurricaneStrength: 0.88,
     sunElevationDeg: 12,
@@ -242,7 +254,6 @@ export const STORM_TYPES = {
     skyColor: 0x2c4257,
   },
 };
-
 export const WEATHER_PRESETS = {
   tradeWinds: {
     stormType: 'none',
@@ -257,6 +268,8 @@ export const WEATHER_PRESETS = {
     extinction: 0.088,
     densityMultiplier: 1.68,
     rainIntensity: 0.0,
+    lightningIntensity: 0.0,
+    fogDensity: 0.22,
     tornadoStrength: 0.0,
     hurricaneStrength: 0.0,
     sunColor: 0xfff5e0,
@@ -276,6 +289,8 @@ export const WEATHER_PRESETS = {
     extinction: 0.058,
     densityMultiplier: 1.55,
     rainIntensity: 0.0,
+    lightningIntensity: 0.0,
+    fogDensity: 0.10,
     tornadoStrength: 0.0,
     hurricaneStrength: 0.0,
     sunColor: 0xfff9ed,
@@ -295,6 +310,8 @@ export const WEATHER_PRESETS = {
     extinction: 0.110,
     densityMultiplier: 1.92,
     rainIntensity: 0.92,
+    lightningIntensity: 0.90,
+    fogDensity: 0.52,
     tornadoStrength: 0.85,
     hurricaneStrength: 0.0,
     sunColor: 0xffc994,
@@ -314,6 +331,8 @@ export const WEATHER_PRESETS = {
     extinction: 0.115,
     densityMultiplier: 1.98,
     rainIntensity: 0.96,
+    lightningIntensity: 0.85,
+    fogDensity: 0.65,
     tornadoStrength: 0.0,
     hurricaneStrength: 0.95,
     sunColor: 0xffd7b0,
@@ -331,7 +350,7 @@ export class AtmosphereLayer {
       cloudGenus: 'cumulus',
       cloudGenusId: defaultGenus.id,
       shapeParams: [...defaultGenus.shapeParams],
-      maxSteps: options.maxSteps ?? 48,
+      maxSteps: options.maxSteps ?? 36,
       debugMode: options.debugMode ?? DEBUG_MODES.final,
       originOffsetX: 0,
       originOffsetZ: 0,
@@ -386,7 +405,7 @@ export class AtmosphereLayer {
       vertexShader: atmosphereVertexShader,
       fragmentShader: atmosphereFragmentShader,
       side: THREE.BackSide,
-      transparent: true,
+      transparent: false,
       depthTest: false,
       depthWrite: false,
       uniforms: {
@@ -538,6 +557,8 @@ export class AtmosphereLayer {
     this.state.extinction = genus.extinction;
     this.state.densityMultiplier = genus.densityMultiplier;
     this.state.rainIntensity = storm.rainIntensity;
+    this.state.lightningIntensity = storm.lightningIntensity;
+    this.state.fogDensity = storm.fogDensity;
     this.state.tornadoStrength = storm.tornadoStrength;
     this.state.hurricaneStrength = storm.hurricaneStrength;
     this.state.windSpeed = storm.windSpeed;
@@ -548,6 +569,7 @@ export class AtmosphereLayer {
     this.state.shapeParams = [...genus.shapeParams];
     this._syncBoundsAndLighting();
   }
+
   setSceneDepthTexture(depthTexture) {
     if (this.material) {
       this.material.uniforms.uSceneDepth.value = depthTexture;
@@ -641,7 +663,7 @@ export class AtmosphereLayer {
       this._sunDir.x,
       this._sunDir.y,
       this._sunDir.z,
-      Math.sin(elevRad)
+      this.state.lightningIntensity
     );
 
     const sunCol = new THREE.Color(this.state.sunColor);
@@ -653,11 +675,12 @@ export class AtmosphereLayer {
     );
 
     const skyCol = new THREE.Color(this.state.skyColor);
+    const hazeCoeff = 0.0001 + this.state.fogDensity * 0.0022;
     this.material.uniforms.uSkyColorAndHaze.value.set(
       skyCol.r,
       skyCol.g,
       skyCol.b,
-      0.00055
+      hazeCoeff
     );
 
     const windAngle = THREE.MathUtils.degToRad(32);
