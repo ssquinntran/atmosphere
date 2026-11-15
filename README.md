@@ -60,15 +60,25 @@ Then open **`http://localhost:8080`** in Chrome, Edge, Firefox, or Safari.
 
 ---
 
-## Unit & Integration Tests (100% Line & Function Coverage)
+## Unit, Front-End Unit & Live Experiment Integration Tests (100% Coverage)
 
-The repository includes a zero-dependency Node.js Unit & Integration test harness (`tests/run-tests.js`) with a deterministic WebGL2 + Three.js mock (`tests/three-mock.js`) and a built-in V8 `inspector` precise coverage profiler:
+The repository includes:
+1. **CLI Unit, Front-End Unit & Live 4-Phase Experiment Suite (`tests/run-tests.js`)** — Executes **14 automated test suites** (including Front-End DOM/UI unit tests and a 4-phase live physical experiment) with a deterministic WebGL2 + Three.js mock (`tests/three-mock.js`) and Node's built-in V8 `inspector` precise coverage profiler:
+   ```bash
+   npm test
+   ```
+2. **Browser-Native Front-End Unit & Live Experiment Dashboard (`tests/frontend-tests.html`)** — Open **`http://localhost:8080/tests/frontend-tests.html`** in any WebGL2 browser to watch the 5 Front-End Unit Tests and the 4-Phase Live Coupled Experiment execute directly on the GPU over the live 3D simulation.
 
-```bash
-npm test
-```
+### Live 4-Phase Experiment Telemetry Summary
 
-### Coverage Summary (`src/`)
+| Experiment Phase | Controlled Condition | Verified Physical & Algorithmic Invariant |
+| :--- | :--- | :--- |
+| **Phase 1: Canyon Venturi & Gorge Carve** | `Morph 0% -> 80% (Fjord)` | Gorge floor stays submerged (`0.0m`), mean massif elevation rises (`30.0m -> 81.3m`), and canyon Venturi funneling jumps (`0.00 -> 1.00`). |
+| **Phase 2: Rankine Vortex + DSU Coalescence** | `Calm (0%) -> Vortex (95%)` | Mean parcel speed increases (`27.9 -> 33.5 m/s`), core updraft reaches `44.0 m/s`, and `DisjointSetUnion` coalesces up to `814` parcels into vortex eddies. |
+| **Phase 3: Tsunami Soliton & 6-DOF ASV Fleet** | `Tsunami 0% -> 95% Soliton` | Saronic ASVs (`CORSAIR`, `CUTLASS`, `SPYGLASS`) heave `+30.3m` and pitch `34.2°` over the advancing soliton wave while remaining 100% inside flooded channels. |
+| **Phase 4: Tidal Sweep & DSU Topology** | `Tide -4.5m -> +11.5m Flood` | `analyzeTerrainTopologyUnionFind` tracks connected emerged islands and flooded sea basins across Low Tide and King Flood Tide. |
+
+### V8 Precise Coverage Summary (`src/`)
 
 | File | Lines | Functions | Branches |
 | :--- | :---: | :---: | :---: |
@@ -100,7 +110,8 @@ npm test
 │       ├── atmosphere.vert.js       # Custom GLSL3 world-space bounding slab vertex shader
 │       └── atmosphere.frag.js       # Custom GLSL3 volumetric clouds, Rankine tornado, lightning & airflow shader
 └── tests/
-    ├── run-tests.js                 # 11 Unit & Integration test suites + V8 precise code coverage engine
+    ├── frontend-tests.html          # Browser-native Front-End Unit Test & Live 4-Phase Experiment runner
+    ├── run-tests.js                 # 14 Unit, Front-End Unit & Live Experiment suites + V8 coverage profiler
     ├── three-mock.js                # Deterministic Three.js + WebGL2 + GPU timer query mock for headless testing
     └── three-mock-loader.mjs        # Node ESM loader hook mapping 'three' to tests/three-mock.js
 ```
