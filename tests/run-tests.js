@@ -545,7 +545,6 @@ async function runAllSuites() {
       assert.ok(atmosphereFragmentShader.includes(`genusId == ${g}`));
     }
   });
-  });
 
   // -------------------------------------------------------------------------
   // SUITE 3: AtmosphereLayer Lifecycle, All 10 Genera, GPU Timer & Context Recovery
@@ -748,7 +747,6 @@ async function runAllSuites() {
     globalThis.window.innerWidth = 1920;
     globalThis.window.innerHeight = 1080;
     globalThis.window.dispatchEvent({ type: 'resize' });
-
     const viewportCanvas = globalThis.document.getElementById('viewport');
     const savedRafCb = domEnv.getRafCallback();
     viewportCanvas.dispatchEvent({
@@ -769,6 +767,273 @@ async function runAllSuites() {
       domEnv.stepAnimationFrame(2500.0);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // SUITE 5: Front-End Unit Tests (HTML Markup Contract, Formatters & UI State)
+  // -------------------------------------------------------------------------
+  await runTest('Front-End Unit: index.html Markup & DOM Schema Contract', 'Validates importmap, canvas, 10 WMO genus options, 14 sliders & telemetry badges', () => {
+    const htmlPath = path.resolve(process.cwd(), 'index.html');
+    const html = fs.readFileSync(htmlPath, 'utf8');
+
+    // Verify ES Module importmap for Three.js r187
+    assert.ok(html.includes('<script type="importmap">'));
+    assert.ok(html.includes('three@0.187.0/build/three.module.js'));
+    assert.ok(html.includes('<canvas id="viewport"></canvas>'));
+
+    // Verify all 3 weather preset buttons
+    for (const preset of ['tradeWinds', 'clearPatrol', 'squall']) {
+      assert.ok(html.includes(`data-preset="${preset}"`), `Missing preset button ${preset}`);
+    }
+
+    // Verify all 10 WMO cloud genera option values in #ctrl-genus
+    for (const genusKey of Object.keys(CLOUD_GENERA)) {
+      assert.ok(html.includes(`<option value="${genusKey}"`), `Missing WMO option ${genusKey}`);
+    }
+
+    // Verify all 14 range sliders and their readout value badges exist in index.html
+    const requiredControls = [
+      ['ctrl-tornado', 'val-tornado'],
+      ['ctrl-tsunami', 'val-tsunami'],
+      ['ctrl-whirlpool', 'val-whirlpool'],
+      ['ctrl-tide', 'val-tide'],
+      ['ctrl-terrain-morph', 'val-terrain-morph'],
+      ['ctrl-peak-height', 'val-peak-height'],
+      ['ctrl-canyon-depth', 'val-canyon-depth'],
+      ['ctrl-coverage', 'val-coverage'],
+      ['ctrl-density', 'val-density'],
+      ['ctrl-rain', 'val-rain'],
+      ['ctrl-base', 'val-base'],
+      ['ctrl-sun', 'val-sun'],
+      ['ctrl-wind', 'val-wind'],
+      ['ctrl-steps', 'val-steps'],
+    ];
+    for (const [ctrlId, valId] of requiredControls) {
+      assert.ok(html.includes(`id="${ctrlId}"`), `Missing slider #${ctrlId}`);
+      assert.ok(html.includes(`id="${valId}"`), `Missing readout badge #${valId}`);
+    }
+
+    // Verify all 4 live telemetry readouts
+    for (const statId of ['stat-fps', 'stat-gpu', 'stat-clusters', 'stat-topology']) {
+      assert.ok(html.includes(`id="${statId}"`), `Missing telemetry node #${statId}`);
+    }
+  });
+
+  await runTest('Front-End Unit: UI Readout Formatters, Preset Exclusivity & Keyboard Guard', 'Unit-tests formatMorphLabel, formatTideLabel, DOM readouts & active button state', () => {
+    const ctx = globalThis.window.simulationContext;
+    assert.ok(ctx, 'window.simulationContext must be exposed');
+
+    // 1. Unit-test pure front-end label formatters across every regime boundary
+    assert.strictEqual(ctx.formatMorphLabel(0.05), '5% (Islands)');
+    assert.strictEqual(ctx.formatMorphLabel(0.35), '35% (Channel Ridges)');
+    assert.strictEqual(ctx.formatMorphLabel(0.65), '65% (Fjord Canyon)');
+    assert.strictEqual(ctx.formatMorphLabel(0.95), '95% (Alpine Massif)');
+
+    assert.strictEqual(ctx.formatTideLabel(-3.5), '-3.5 m (Low Tide)');
+    assert.strictEqual(ctx.formatTideLabel(0.0), '0.0 m (Mean Tide)');
+    assert.strictEqual(ctx.formatTideLabel(2.5), '+2.5 m (High Tide)');
+    assert.strictEqual(ctx.formatTideLabel(8.5), '+8.5 m (King Tide)');
+
+    // 2. Unit-test preset button active class exclusivity and DOM badge synchronization
+    const squallBtn = domEnv.presetBtns[2]; // Tornado Squall
+    squallBtn.click();
+    assert.strictEqual(squallBtn.classList.contains('active'), true);
+    assert.strictEqual(domEnv.presetBtns[0].classList.contains('active'), false);
+    assert.strictEqual(globalThis.document.getElementById('ctrl-genus').value, 'cumulonimbus');
+    assert.strictEqual(globalThis.document.getElementById('val-tornado').textContent, '85%');
+    assert.ok(globalThis.document.getElementById('genus-info').innerHTML.includes('Cumulonimbus (Cb)'));
+
+    // 3. Unit-test manual genus change clearing preset active state
+    const ctrlGenus = globalThis.document.getElementById('ctrl-genus');
+    ctrlGenus.value = 'cirrus';
+    ctrlGenus.dispatchEvent({ type: 'change', target: ctrlGenus });
+    for (const btn of domEnv.presetBtns) {
+      assert.strictEqual(btn.classList.contains('active'), false);
+    }
+    assert.ok(globalThis.document.getElementById('genus-info').innerHTML.includes('Cirrus (Ci)'));
+  });
+
+  // -------------------------------------------------------------------------
+  // SUITE 6: Live Multi-Phase Scientific Experiment (Integration Trial)
+  // -------------------------------------------------------------------------
+  const experimentRows = [];
+
+  await runTest('Integration Live Experiment: 4-Phase Coupled Atmosphere–Vortex–Hydrodynamics–UnionFind Trial', 'Runs controlled multi-frame physical experiments & validates physical invariants', () => {
+    const ctx = globalThis.window.simulationContext;
+    const { atmosphere, terrain, fluidClusterParticles, fleet, hydroState, terrainState } = ctx;
+
+    // -----------------------------------------------------------------------
+    // PHASE 1: Topographic Canyon Venturi & Flooded Gorge Carve Experiment
+    // -----------------------------------------------------------------------
+    const ctrlMorph = globalThis.document.getElementById('ctrl-terrain-morph');
+    const ctrlCanyon = globalThis.document.getElementById('ctrl-canyon-depth');
+    const ctrlTide = globalThis.document.getElementById('ctrl-tide');
+
+    ctrlTide.value = '0.0';
+    ctrlTide.dispatchEvent({ type: 'input', target: ctrlTide });
+    ctrlCanyon.value = '0.80';
+    ctrlCanyon.dispatchEvent({ type: 'input', target: ctrlCanyon });
+
+    const computeMeanElevation = () => {
+      let sumH = 0;
+      let countSamples = 0;
+      for (let x = -350; x <= 350; x += 50) {
+        for (let z = -350; z <= 350; z += 50) {
+          sumH += terrain.sampleHeightAndGradient(x, z).h;
+          countSamples++;
+        }
+      }
+      return sumH / countSamples;
+    };
+
+    // Trial 1A: Archipelago (Morph = 0.0)
+    ctrlMorph.value = '0.00';
+    ctrlMorph.dispatchEvent({ type: 'input', target: ctrlMorph });
+    const archMeanH = computeMeanElevation();
+
+    // Trial 1B: Flooded Fjord Canyon (Morph = 0.80) — islands merge into canyon massif while center gorge stays flooded
+    ctrlMorph.value = '0.80';
+    ctrlMorph.dispatchEvent({ type: 'input', target: ctrlMorph });
+    const canyonMeanH = computeMeanElevation();
+    const gorgeCenter = terrain.sampleHeightAndGradient(20.0, 0.0);
+    const openOcean = terrain.sampleHeightAndGradient(450.0, 450.0);
+
+    // Verify the fjord centerline is submerged (h === 0 clamped) with high Venturi funneling, and massif mean elevation grows
+    assert.strictEqual(gorgeCenter.h, 0.0);
+    assert.ok(gorgeCenter.funnel > openOcean.funnel + 0.5, 'Fjord canyon channel must have significantly higher Venturi funneling than open ocean');
+    assert.ok(canyonMeanH > archMeanH * 1.25, 'Morphing from Islands (0%) to Canyon Massif (80%) must increase total landmass elevation');
+
+    experimentRows.push({
+      phase: 'Phase 1: Canyon Venturi & Gorge Carve',
+      condition: 'Morph 0% -> 80% (Fjord)',
+      metricA: `Gorge Floor: ${gorgeCenter.h.toFixed(1)}m | Mean Massif Elevation: ${archMeanH.toFixed(1)}m -> ${canyonMeanH.toFixed(1)}m`,
+      metricB: `Venturi Funnel (Open Sea vs Gorge): ${openOcean.funnel.toFixed(2)} -> ${gorgeCenter.funnel.toFixed(2)}`,
+    });
+
+    // -----------------------------------------------------------------------
+    // PHASE 2: Rankine Tornado + Whirlpool Coalescence & Union-Find Experiment
+    // -----------------------------------------------------------------------
+    const measureParticleMetrics = (tornadoVal, whirlpoolVal, steps) => {
+      hydroState.tornadoStrength = tornadoVal;
+      hydroState.whirlpoolStrength = whirlpoolVal;
+      hydroState.tsunamiStrength = 0.0;
+      atmosphere.setVortexAndTide(hydroState.tornadoX, hydroState.tornadoZ, tornadoVal, 0.0);
+
+      for (let s = 0; s < steps; s++) {
+        domEnv.stepAnimationFrame(16.0);
+      }
+
+      let sumSpeed = 0;
+      let maxUpdraft = -Infinity;
+      const vels = fluidClusterParticles.velocities;
+      const n = fluidClusterParticles.count;
+      for (let i = 0; i < n; i++) {
+        const vx = vels[i * 3];
+        const vy = vels[i * 3 + 1];
+        const vz = vels[i * 3 + 2];
+        const spd = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        sumSpeed += spd;
+        if (vy > maxUpdraft) maxUpdraft = vy;
+      }
+      return {
+        meanSpeed: sumSpeed / n,
+        maxUpdraft,
+        activeClusters: fluidClusterParticles.activeClusters,
+        largestCluster: fluidClusterParticles.largestCluster,
+      };
+    };
+
+    const calmTrial = measureParticleMetrics(0.0, 0.0, 20);
+    const stormTrial = measureParticleMetrics(0.95, 0.90, 25);
+
+    assert.ok(stormTrial.meanSpeed > calmTrial.meanSpeed, 'Supercell tornado must increase mean parcel kinetic speed');
+    assert.ok(stormTrial.maxUpdraft > 20.0, 'Rankine tornado core must generate strong vertical updraft (>20 m/s)');
+    assert.ok(stormTrial.largestCluster >= 2, 'Union-Find must coalesce colliding vortex parcels into multi-particle eddies');
+
+    experimentRows.push({
+      phase: 'Phase 2: Rankine Vortex + DSU Coalescence',
+      condition: 'Calm (0%) -> Vortex (95%)',
+      metricA: `Speed: ${calmTrial.meanSpeed.toFixed(1)} -> ${stormTrial.meanSpeed.toFixed(1)} m/s (Updraft ${stormTrial.maxUpdraft.toFixed(1)} m/s)`,
+      metricB: `DSU Clusters: ${stormTrial.activeClusters} (Max Eddy: ${stormTrial.largestCluster} parcels)`,
+    });
+
+    // -----------------------------------------------------------------------
+    // PHASE 3: Tsunami Soliton Wave & 6-DOF Saronic ASV Hydrodynamics Experiment
+    // -----------------------------------------------------------------------
+    hydroState.tornadoStrength = 0.0;
+    hydroState.whirlpoolStrength = 0.0;
+    hydroState.tsunamiStrength = 0.0;
+    let calmMaxBoatY = -Infinity;
+    for (let s = 0; s < 15; s++) {
+      domEnv.stepAnimationFrame(30.0);
+      for (const v of fleet) {
+        if (v.group.position.y > calmMaxBoatY) calmMaxBoatY = v.group.position.y;
+      }
+    }
+
+    hydroState.tsunamiStrength = 0.95;
+    let tsunamiMaxBoatY = -Infinity;
+    let tsunamiMaxTiltRad = 0;
+    for (let s = 0; s < 45; s++) {
+      // Advance 250ms per step (11.25s total) so the Tsunami Soliton sweeps the full 760m fjord across all 3 ASVs
+      domEnv.stepAnimationFrame(250.0);
+      for (const v of fleet) {
+        if (v.group.position.y > tsunamiMaxBoatY) tsunamiMaxBoatY = v.group.position.y;
+        const cosTilt = Math.min(1.0, Math.max(-1.0, v.group.quaternion.y));
+        const tiltRad = Math.acos(cosTilt);
+        if (tiltRad > tsunamiMaxTiltRad) tsunamiMaxTiltRad = tiltRad;
+        // Verify boat never goes underneath land masses (terrain floor along waterway is <= waterLevel)
+        const terrAtBoat = terrain.sampleHeightAndGradient(v.group.position.x, v.group.position.z);
+        assert.ok(terrAtBoat.h <= hydroState.waterLevel + 0.5, 'ASV must remain strictly in flooded waterway channel');
+      }
+    }
+
+    assert.ok(tsunamiMaxBoatY > calmMaxBoatY + 12.0, 'ASV fleet must heave upward >12m when riding the 26m Tsunami soliton wave');
+    assert.ok(tsunamiMaxTiltRad > 0.08, 'ASV fleet must dynamically pitch/roll on the steep Tsunami wave slope');
+
+    experimentRows.push({
+      phase: 'Phase 3: Tsunami Soliton & 6-DOF ASV Fleet',
+      condition: 'Tsunami 0% -> 95% Soliton',
+      metricA: `Peak ASV Heave Y: ${calmMaxBoatY.toFixed(1)}m -> +${tsunamiMaxBoatY.toFixed(1)}m`,
+      metricB: `Peak Hull Pitch/Roll: ${(tsunamiMaxTiltRad * 180 / Math.PI).toFixed(1)} deg | Waterway Safe: 100%`,
+    });
+
+    // -----------------------------------------------------------------------
+    // PHASE 4: Tidal Sea-Level Sweep & Union-Find Land/Water Topology Experiment
+    // -----------------------------------------------------------------------
+    ctrlMorph.value = '0.25'; // Archipelago / Channel Ridges with varied island peak heights
+    ctrlMorph.dispatchEvent({ type: 'input', target: ctrlMorph });
+
+    ctrlTide.value = '-4.5';
+    ctrlTide.dispatchEvent({ type: 'input', target: ctrlTide });
+    const lowTideIslands = terrainState.islandCount;
+    const lowTideBasins = terrainState.waterBasinCount;
+
+    ctrlTide.value = '11.5';
+    ctrlTide.dispatchEvent({ type: 'input', target: ctrlTide });
+    const kingTideIslands = terrainState.islandCount;
+    const kingTideBasins = terrainState.waterBasinCount;
+
+    assert.ok(lowTideIslands >= kingTideIslands, 'King flood tide (+11.5m) must submerge low-lying islands vs Low tide (-4.5m)');
+    assert.ok(lowTideIslands >= 1 && kingTideBasins >= 1, 'Union-Find topology scan must detect valid land and sea components');
+
+    experimentRows.push({
+      phase: 'Phase 4: Tidal Sweep & DSU Land/Sea Topology',
+      condition: 'Tide -4.5m -> +11.5m Flood',
+      metricA: `Emerged Islands: ${lowTideIslands} Isl -> ${kingTideIslands} Isl`,
+      metricB: `Connected Sea Basins: ${lowTideBasins} Sea -> ${kingTideBasins} Sea`,
+    });
+  });
+
+  // Print Live Experiment Telemetry Table
+  console.log('\n----------------------------------------------------------------------');
+  console.log(' LIVE 4-PHASE SCIENTIFIC EXPERIMENT TELEMETRY REPORT');
+  console.log('----------------------------------------------------------------------');
+  for (const row of experimentRows) {
+    console.log(`  • ${row.phase} [${row.condition}]`);
+    console.log(`      ├─ ${row.metricA}`);
+    console.log(`      └─ ${row.metricB}`);
+  }
+  console.log('----------------------------------------------------------------------');
 
   // -------------------------------------------------------------------------
   // 4. Compute & Print V8 Code Coverage Report
