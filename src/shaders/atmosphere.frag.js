@@ -89,8 +89,8 @@ float remap(float val, float low1, float high1, float low2, float high2) {
 /**
  * Evaluates 3D topographic air-land interaction at worldPos:
  * - Solid landmass exclusion (clouds cannot exist inside rock)
- * - Potential-flow horizontal deflection around mountain flanks & funneling into gorges
- * - Orographic vertical lift over windward ridges + windward condensation / leeward dissipation
+ * - Potential-flow horizontal deflection around mountain flanks & into canyon gorges
+ * - Orographic vertical lift over windward slopes + windward condensation / leeward dissipation
  */
 void evaluateTopographicAirflow(
   vec3 worldPos,
@@ -165,8 +165,13 @@ float evaluateTornadoFunnel(vec3 worldPos, vec3 boxMin, vec3 boxMax, float terra
   vec2 relXZ = worldPos.xz - vortexCenter;
   float r = length(relXZ);
 
-  // Tapering Rankine funnel radius: narrow near water (16m), flaring wide into wall cloud at top (92m)
-  float funnelRadius = mix(15.0, 62.0, pow(fh, 1.55)) + pow(max(fh - 0.55, 0.0) / 0.45, 2.0) * 58.0;
+  int stormTypeId = int(uWorldOriginOffset.z + 0.5);
+
+  // Tapering Rankine funnel radius: slender columnar tube for Waterspout (1) vs wide wedge for EF5 Supercell (2)
+  float baseR = (stormTypeId == 1) ? 11.0 : 22.0;
+  float topR = (stormTypeId == 1) ? 42.0 : 78.0;
+  float collarFlare = (stormTypeId == 1) ? 34.0 : 68.0;
+  float funnelRadius = mix(baseR, topR, pow(fh, 1.45)) + pow(max(fh - 0.55, 0.0) / 0.45, 2.0) * collarFlare;
   if (r > funnelRadius * 2.2) return 0.0;
 
   // Helical coordinate twist around vortex axis
@@ -258,12 +263,17 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   // Apply Relative-To-Center (RTC) floating-origin offset + topographic streamline deflection
   vec2 globalXZ = worldPos.xz + uWorldOriginOffset.xy + flowOffsetXZ;
 
-  // Swirl cloud deck cyclonically around the tornado mesocyclone core when tornado is active
-  if (uVortexAndTide.z > 0.01) {
+  int stormTypeId = int(uWorldOriginOffset.z + 0.5);
+  float hurricaneStrength = uWorldOriginOffset.w;
+
+  // Swirl cloud deck cyclonically around the tornado mesocyclone or hurricane eye
+  if (uVortexAndTide.z > 0.01 || hurricaneStrength > 0.01) {
     vec2 dVortex = worldPos.xz - uVortexAndTide.xy;
     float rV = length(dVortex);
-    if (rV < 260.0) {
-      float swirlAngle = (1.0 - rV / 260.0) * 2.2 * uVortexAndTide.z;
+    float maxSwirlR = hurricaneStrength > 0.01 ? 560.0 : 260.0;
+    if (rV < maxSwirlR) {
+      float swirlBoost = max(uVortexAndTide.z * 2.2, hurricaneStrength * 2.8);
+      float swirlAngle = (1.0 - rV / maxSwirlR) * swirlBoost;
       float cs = cos(swirlAngle);
       float sn = sin(swirlAngle);
       vec2 rotDV = vec2(dVortex.x * cs - dVortex.y * sn, dVortex.x * sn + dVortex.y * cs);
@@ -283,13 +293,40 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
   vec2 weatherUV = ((globalXZ - boxMin.xz) / boxSize.xz) * weatherFreq + windOffset * 0.00085;
   vec3 weather = texture(uWeatherMap, weatherUV).rgb;
 
-  // Sub-cloud region: evaluate both tornado funnel column and volumetric rain shafts (virga)
+  // Evaluate Hurricane Stadium Eye / Spiral Rainbands or Derecho Bow-Echo Shelf Cloud modulation
+  float eyeClearMask = 1.0;
+  float stormBandBoost = 0.0;
+  if (hurricaneStrength > 0.01) {
+    vec2 dStorm = worldPos.xz - uVortexAndTide.xy;
+    float rStorm = length(dStorm);
+    float thetaStorm = atan(dStorm.y, dStorm.x);
+    float normAlt = clamp((liftedY - boxMin.y) / max(boxSize.y, 10.0), 0.0, 1.0);
+
+    if (stormTypeId == 4) {
+      // Derecho Bow-Echo Squall Line: advancing bowed Arcus Shelf Cloud wedge
+      float bowZ = mod(uWindAndTime.z * 38.0, 680.0) - 340.0 + (worldPos.x * worldPos.x) * 0.00065;
+      float distFromFront = worldPos.z - bowZ;
+      float shelfWedge = exp(-pow(distFromFront / 85.0, 2.0));
+      stormBandBoost = shelfWedge * 0.45 * hurricaneStrength;
+    } else {
+      // Category 5 Hurricane (3) or Bomb Cyclone Nor'easter (5): Stadium Eyewall + Logarithmic Spiral Rainbands
+      float eyeRadius = mix(76.0, 138.0, normAlt);
+      eyeClearMask = mix(1.0, smoothstep(eyeRadius * 0.48, eyeRadius * 0.88, rStorm), hurricaneStrength);
+      float eyewallRing = exp(-pow((rStorm - eyeRadius) / 36.0, 2.0));
+      float bandCount = (stormTypeId == 5) ? 2.0 : 4.0;
+      float spiralWave = cos(bandCount * thetaStorm - rStorm * 0.024 + uWindAndTime.z * 2.1) * 0.5 + 0.5;
+      float outerBands = pow(spiralWave, 1.6) * smoothstep(eyeRadius * 0.8, eyeRadius * 1.5, rStorm);
+      stormBandBoost = (eyewallRing * 0.58 + outerBands * 0.34) * hurricaneStrength;
+    }
+  }
+
+  // Sub-cloud region: evaluate both tornado funnel column and volumetric rain shafts (virga / spiral rainbands)
   if (liftedY < boxMin.y) {
     if (rainIntensity > 0.01 && worldPos.y >= terrainY) {
       float subH = clamp((worldPos.y - terrainY) / max(boxMin.y - terrainY, 10.0), 0.0, 1.0);
       vec2 shearXZ = globalXZ + uWindAndTime.xy * (boxMin.y - liftedY) * 0.06;
       vec2 rainUV = (shearXZ - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
-      float coreCov = texture(uWeatherMap, rainUV).r;
+      float coreCov = clamp(texture(uWeatherMap, rainUV).r + stormBandBoost, 0.0, 1.0) * eyeClearMask;
       float shaftMask = smoothstep(0.45, 0.82, coreCov * uBoundsMaxAndCoverage.w * 1.5);
       if (shaftMask > 0.01) {
         vec3 streakUVW = vec3(shearXZ.x * 0.009, worldPos.y * 0.002 + uWindAndTime.z * 0.45, shearXZ.y * 0.009);
@@ -299,6 +336,7 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
     }
     return funnelDensity * densityMult;
   }
+
   float h = clamp((liftedY - boxMin.y) / boxSize.y, 0.0, 1.0);
   if (liftedY > boxMax.y) return funnelDensity * densityMult;
 
@@ -309,8 +347,7 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
     weather.r = max(weather.r, weather.b * 0.92);
     coverageBoost = 1.85;
   }
-
-  float localCoverage = clamp(weather.r * (uBoundsMaxAndCoverage.w * coverageBoost) + orographicMod, 0.0, 1.0);
+  float localCoverage = clamp((weather.r * (uBoundsMaxAndCoverage.w * coverageBoost) + orographicMod + stormBandBoost) * eyeClearMask, 0.0, 1.0);
   if (localCoverage <= 0.03) return funnelDensity * densityMult;
 
   float heightProfile = computeGenusHeightProfile(genusId, h, weather);
@@ -529,12 +566,19 @@ void main() {
   int genusId = int(uDebugParams.y + 0.5);
   float rainIntensity = uDebugParams.z;
   float tornadoStrength = uVortexAndTide.z;
+  float hurricaneStrength = uWorldOriginOffset.w;
 
-  // Stochastic volumetric sheet/core lightning flash inside heavy storms or tornado mesocyclones
-  float stormActivity = max(tornadoStrength, (genusId == 9 || genusId == 5) ? rainIntensity : 0.0);
+  // Stochastic volumetric sheet/core/eyewall lightning flash inside heavy storms, tornadoes, or hurricanes
+  float stormActivity = max(max(tornadoStrength, hurricaneStrength), (genusId == 9 || genusId == 5) ? rainIntensity : 0.0);
   float flashWave = pow(max(sin(uWindAndTime.z * 7.3) * sin(uWindAndTime.z * 19.7), 0.0), 12.0);
   float lightningPulse = stormActivity > 0.25 ? flashWave * stormActivity * 6.5 : 0.0;
-  vec3 lightningOrigin = vec3(uVortexAndTide.x, uBoundsMinAndFade.y + 45.0, uVortexAndTide.y);
+  float flashAngle = uWindAndTime.z * 3.7;
+  float flashRadius = hurricaneStrength > 0.2 ? 95.0 : 0.0;
+  vec3 lightningOrigin = vec3(
+    uVortexAndTide.x + cos(flashAngle) * flashRadius,
+    uBoundsMinAndFade.y + 45.0,
+    uVortexAndTide.y + sin(flashAngle) * flashRadius
+  );
 
   bool inCloud = false;
   float weightedDist = 0.0;
