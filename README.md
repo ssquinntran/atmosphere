@@ -32,10 +32,16 @@ Then open **`http://localhost:8080`** in Chrome, Edge, Firefox, or Safari.
 
 ## Key Engineering Features
 
-### 1. Custom Native Volumetric Shaders & Rankine Tornado Funnel (`src/shaders/`)
+### 1. Custom Native Volumetric Shaders, 6 Storm Regimes & Rankine Tornado / Hurricane Eyewall (`src/shaders/`)
 - **`atmosphere.vert.js`**: Projects an analytical proxy bounding slab (`[uBoundsMin, uBoundsMax]`, dynamically expanded for orographic lift headroom and sub-cloud tornado/virga shafts).
 - **`atmosphere.frag.js`**:
-  - **3D Rankine Tornado / Maritime Waterspout (`evaluateTornadoFunnel`)**: Raymarches a spinning helical condensation funnel from the mesocyclone cloud collar all the way to the sea surface (`uVortexAndTide`), complete with a hollow low-pressure eye wall, cyclonic cloud-deck swirl, sea-spray touchdown collar, and stochastic **volumetric internal storm lightning** flashes.
+  - **6 Meteorological Storm Classes (`STORM_TYPES`)**:
+    1. **Fair Weather (`none`)**: Crisp trade-wind cumulus with calm ocean swells.
+    2. **Maritime Waterspout (`waterspout`)**: Slender translucent columnar Rankine condensation tube (`11–42m` radius) connecting cloud base to a sea-spray ring.
+    3. **EF5 Supercell Wedge Tornado (`supercellTornado`)**: Massive wide-wedged mesocyclone Rankine vortex (`22–78m` radius), rotating wall cloud collar, violent multi-cell internal storm lightning, and strong surface suction.
+    4. **Category 5 Tropical Hurricane (`hurricane`)**: Synoptic rotating cyclone featuring a **crystal-clear calm low-pressure Eye**, outward-sloping **Stadium Eyewall**, **4 Logarithmic Spiral Rainbands**, eyewall lightning, and an ocean **Inverted-Barometer Storm Surge Dome**.
+    5. **Derecho Bow-Echo Squall Line (`derecho`)**: Advancing bowed **Arcus Shelf / Roll Cloud** wedge with `36 m/s` straight-line gale winds and sheet lightning.
+    6. **Nor'easter Bomb Cyclone (`norEaster`)**: Baroclinic comma-head cyclone with dense `Nimbostratus` snow/sleet bands and polar silver-slate lighting.
   - **Analytical Ray–AABB Intersection** with `64×64` blue-noise start jitter and adaptive empty-space stride skipping.
   - **Dual-Lobe Henyey-Greenstein Phase Function** ($g_1 = 0.72$, $g_2 = -0.30$) + **Multi-Octave Beer-Lambert Extinction** + **Powder-Sugar Edge Term**.
   - **Off-Axis Radial Euclidean Scene Depth (`tScene`)**: Linearizes the hardware `DepthTexture` and divides by $\cos\theta = \mathbf{d}_{\text{ray}} \cdot \mathbf{d}_{\text{camFwd}}$ for distortion-free 3D mountain/wave occlusion.
