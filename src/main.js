@@ -811,7 +811,10 @@ const fleet = [
   { ...createSaronicASVMesh({ vesselClass: 'CUTLASS',  hullNumber: 'ASV-02', accentHex: 0x34d399, accentCss: '#34d399', scale: 1.00 }), routeType: 'crossGorgeEastWest',  speed: 0.16, phase: 1.7 },
   { ...createSaronicASVMesh({ vesselClass: 'SPYGLASS', hullNumber: 'ASV-03', accentHex: 0xf59e0b, accentCss: '#f59e0b', scale: 0.92 }), routeType: 'canyonJunctionWeave', speed: 0.13, phase: 3.4 },
 ];
-fleet.forEach((v) => baseScene.add(v.group));
+fleet.forEach((v) => {
+  v.fwd = new THREE.Vector3(0, 0, 1);
+  baseScene.add(v.group);
+});
 
 // 6. GPU-Accelerated 3D Rain Streak System
 function createPrecipitationSystem(dropCount = 9000) {
@@ -1223,6 +1226,39 @@ ctrlDebug.addEventListener('change', (e) => {
   refreshControlReadouts();
 });
 
+const ctrlCameraView = document.getElementById('ctrl-camera-view');
+const btnResetCamera = document.getElementById('btn-reset-camera');
+let activeCameraView = 'free';
+const _prevBoatPos = new THREE.Vector3();
+let _hasPrevBoatPos = false;
+
+function applyCameraView(view, snap = true) {
+  activeCameraView = view;
+  if (view === 'free') {
+    _hasPrevBoatPos = false;
+    if (snap) {
+      camera.position.set(-165, 64, 265);
+      controls.target.set(0, 68, 0);
+    }
+    controls.update();
+    return;
+  }
+  const idx = parseInt(view.slice(5), 10);
+  const vessel = fleet[idx] || fleet[0];
+  if (snap) {
+    const p = vessel.group.position;
+    const f = vessel.fwd;
+    camera.position.set(p.x - f.x * 12, p.y + 7.5, p.z - f.z * 12);
+    controls.target.set(p.x + f.x * 26, p.y + 4.5, p.z + f.z * 26);
+  }
+  _prevBoatPos.copy(vessel.group.position);
+  _hasPrevBoatPos = true;
+  controls.update();
+}
+
+ctrlCameraView.addEventListener('change', (e) => applyCameraView(e.target.value, true));
+btnResetCamera.addEventListener('click', () => applyCameraView(activeCameraView, true));
+
 const _navFwd = new THREE.Vector3();
 const _navRight = new THREE.Vector3();
 const _navUp = new THREE.Vector3(0, 1, 0);
@@ -1255,8 +1291,8 @@ window.addEventListener('keydown', (e) => {
   } else if (k === 'q' || k === '-') {
     camera.position.lerp(controls.target, -0.16);
   } else if (k === 'r') {
-    camera.position.set(-165, 64, 265);
-    controls.target.set(0, 68, 0);
+    applyCameraView(activeCameraView, true);
+    return;
   }
   controls.update();
 });
@@ -1399,6 +1435,22 @@ function animate(now) {
     _fwdVec.crossVectors(_rightVec, _upVec).normalize();
     _rotMat.makeBasis(_rightVec, _upVec, _fwdVec);
     v.group.quaternion.setFromRotationMatrix(_rotMat);
+    v.fwd.copy(_fwdVec);
+  }
+
+  if (activeCameraView !== 'free') {
+    const vessel = fleet[parseInt(activeCameraView.slice(5), 10)] || fleet[0];
+    const bp = vessel.group.position;
+    if (_hasPrevBoatPos) {
+      const dx = bp.x - _prevBoatPos.x;
+      const dy = bp.y - _prevBoatPos.y;
+      const dz = bp.z - _prevBoatPos.z;
+      camera.position.set(camera.position.x + dx, camera.position.y + dy, camera.position.z + dz);
+      controls.target.set(controls.target.x + dx, controls.target.y + dy, controls.target.z + dz);
+      controls.update();
+    }
+    _prevBoatPos.copy(bp);
+    _hasPrevBoatPos = true;
   }
 
   const windAngle = THREE.MathUtils.degToRad(32);
