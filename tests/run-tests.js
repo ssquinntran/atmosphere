@@ -504,6 +504,16 @@ async function runAllSuites() {
       fireInput(id, val);
     }
 
+    const ctrlCameraView = globalThis.document.getElementById('ctrl-camera-view');
+    const btnResetCamera = globalThis.document.getElementById('btn-reset-camera');
+    ctrlCameraView.value = 'boat-0';
+    ctrlCameraView.dispatchEvent({ type: 'change', target: ctrlCameraView });
+    domEnv.stepAnimationFrame(35.0);
+    domEnv.stepAnimationFrame(35.0);
+    btnResetCamera.dispatchEvent({ type: 'click', target: btnResetCamera });
+    ctrlCameraView.value = 'free';
+    ctrlCameraView.dispatchEvent({ type: 'change', target: ctrlCameraView });
+
     const ctrlDebug = globalThis.document.getElementById('ctrl-debug');
     for (const modeVal of ['0', '1', '2', '3']) {
       ctrlDebug.value = modeVal;
