@@ -176,8 +176,17 @@
     <div class="preset-row">
       <button class="preset-btn active" data-preset="tradeWinds">Trade Winds</button>
       <button class="preset-btn" data-preset="clearPatrol">High Cirrus</button>
-      <button class="preset-btn" data-preset="squall">Tornado Squall</button>
+      <button class="preset-btn" data-preset="squall">EF5 Tornado</button>
+      <button class="preset-btn" data-preset="hurricane">Cat-5 Hurricane</button>
     </div>
+    <select id="ctrl-storm">
+      <option value="none" selected>Fair Weather</option>
+      <option value="waterspout">Waterspout</option>
+      <option value="supercellTornado">EF5 Tornado</option>
+      <option value="hurricane">Cat-5 Hurricane</option>
+      <option value="derecho">Derecho Squall</option>
+      <option value="norEaster">Nor'easter</option>
+    </select>
     <select id="ctrl-genus">
       <option value="cumulus" selected>Cumulus</option>
       <option value="stratus">Stratus</option>
@@ -198,6 +207,7 @@
     </select>
     <div id="debug-caption"></div>
     <span id="val-tornado">0%</span><input type="range" id="ctrl-tornado" min="0" max="1" step="0.02" value="0" />
+    <span id="val-hurricane">0%</span><input type="range" id="ctrl-hurricane" min="0" max="1" step="0.02" value="0" />
     <span id="val-tsunami">0%</span><input type="range" id="ctrl-tsunami" min="0" max="1" step="0.02" value="0" />
     <span id="val-whirlpool">0%</span><input type="range" id="ctrl-whirlpool" min="0" max="1" step="0.02" value="0" />
     <span id="val-tide">0.0 m</span><input type="range" id="ctrl-tide" min="-5" max="12" step="0.5" value="0" />
