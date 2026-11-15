@@ -60,20 +60,47 @@ Then open **`http://localhost:8080`** in Chrome, Edge, Firefox, or Safari.
 
 ---
 
+## Unit & Integration Tests (100% Line & Function Coverage)
+
+The repository includes a zero-dependency Node.js Unit & Integration test harness (`tests/run-tests.js`) with a deterministic WebGL2 + Three.js mock (`tests/three-mock.js`) and a built-in V8 `inspector` precise coverage profiler:
+
+```bash
+npm test
+```
+
+### Coverage Summary (`src/`)
+
+| File | Lines | Functions | Branches |
+| :--- | :---: | :---: | :---: |
+| `src/layers/AtmosphereLayer.js` | **100.0%** | **100.0%** | **100.0%** |
+| `src/main.js` | **100.0%** | **100.0%** | **97.2%** |
+| `src/noise/CloudNoiseBaker.js` | **100.0%** | **100.0%** | **100.0%** |
+| `src/physics/FluidClusterPhysics.js` | **100.0%** | **100.0%** | **100.0%** |
+| `src/shaders/atmosphere.frag.js` | **100.0%** | **100.0%** | **100.0%** |
+| `src/shaders/atmosphere.vert.js` | **100.0%** | **100.0%** | **100.0%** |
+| **ALL FILES (TOTAL)** | **100.0%** | **100.0%** | **98.9%** |
+
+---
+
 ## Repository Structure
 
 ```text
 ├── README.md                        # Architecture overview, shader pipeline & data structures
 ├── index.html                       # Entry viewport, importmap (Three.js r187), HUD & telemetry
-└── src/
-    ├── main.js                      # Renderer, morphable canyon terrain, vertex-displaced ocean, Saronic ASVs
-    ├── layers/
-    │   └── AtmosphereLayer.js       # Composable volumetric cloud/tornado layer, 10 WMO genera & GPU timer
-    ├── noise/
-    │   └── CloudNoiseBaker.js       # GPU slice-atlas 3D Perlin-Worley baker, weather map & blue-noise jitter
-    ├── physics/
-    │   └── FluidClusterPhysics.js   # SpatialHashGrid3D + DisjointSetUnion (Union-Find) + Lagrangian physics
-    └── shaders/
-        ├── atmosphere.vert.js       # Custom GLSL3 world-space bounding slab vertex shader
-        └── atmosphere.frag.js       # Custom GLSL3 volumetric clouds, Rankine tornado, lightning & airflow shader
+├── package.json                     # Zero-dependency ESM config & `npm test` script
+├── src/
+│   ├── main.js                      # Renderer, morphable canyon terrain, vertex-displaced ocean, Saronic ASVs
+│   ├── layers/
+│   │   └── AtmosphereLayer.js       # Composable volumetric cloud/tornado layer, 10 WMO genera & GPU timer
+│   ├── noise/
+│   │   └── CloudNoiseBaker.js       # GPU slice-atlas 3D Perlin-Worley baker, weather map & blue-noise jitter
+│   ├── physics/
+│   │   └── FluidClusterPhysics.js   # SpatialHashGrid3D + DisjointSetUnion (Union-Find) + Lagrangian physics
+│   └── shaders/
+│       ├── atmosphere.vert.js       # Custom GLSL3 world-space bounding slab vertex shader
+│       └── atmosphere.frag.js       # Custom GLSL3 volumetric clouds, Rankine tornado, lightning & airflow shader
+└── tests/
+    ├── run-tests.js                 # 11 Unit & Integration test suites + V8 precise code coverage engine
+    ├── three-mock.js                # Deterministic Three.js + WebGL2 + GPU timer query mock for headless testing
+    └── three-mock-loader.mjs        # Node ESM loader hook mapping 'three' to tests/three-mock.js
 ```
