@@ -105,7 +105,7 @@
 
     .preset-row {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 6px;
     }
 
@@ -219,7 +219,6 @@
       padding-top: 8px;
     }
   </style>
-
   <script type="importmap">
     {
       "imports": {
@@ -242,12 +241,25 @@
 
   <aside class="hud-controls">
     <div>
-      <div class="section-title">Operational Weather Presets</div>
+      <div class="section-title">Operational Weather &amp; Storm Presets</div>
       <div class="preset-row">
         <button class="preset-btn active" data-preset="tradeWinds">Trade Winds</button>
         <button class="preset-btn" data-preset="clearPatrol">High Cirrus</button>
-        <button class="preset-btn" data-preset="squall">Tornado Squall</button>
+        <button class="preset-btn" data-preset="squall">EF5 Tornado</button>
+        <button class="preset-btn" data-preset="hurricane">Cat-5 Hurricane</button>
       </div>
+    </div>
+
+    <div>
+      <div class="section-title">Storm System Regime (6 Types)</div>
+      <select id="ctrl-storm" class="debug-select" aria-label="Storm System Regime">
+        <option value="none" selected>0: Fair Weather (No Cyclone)</option>
+        <option value="waterspout">1: Maritime Waterspout (Rankine Tube)</option>
+        <option value="supercellTornado">2: EF5 Supercell Wedge Tornado</option>
+        <option value="hurricane">3: Category 5 Hurricane (Eyewall + Spiral Bands)</option>
+        <option value="derecho">4: Derecho Squall Line (Arcus Shelf Cloud)</option>
+        <option value="norEaster">5: Nor'easter Bomb Cyclone (Comma-Head)</option>
+      </select>
     </div>
 
     <div>
@@ -288,11 +300,16 @@
     </div>
 
     <div class="control-group">
-      <div class="section-title">Vortex, Tsunami, Whirlpool &amp; Tides</div>
+      <div class="section-title">Tornado, Hurricane, Tsunami, Whirlpool &amp; Tides</div>
 
       <div class="slider-row">
         <div class="slider-label"><span>Tornado / Waterspout Vortex</span><span class="val" id="val-tornado">0%</span></div>
         <input type="range" id="ctrl-tornado" min="0.00" max="1.00" step="0.02" value="0.00" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Hurricane Eyewall &amp; Spiral Bands</span><span class="val" id="val-hurricane">0%</span></div>
+        <input type="range" id="ctrl-hurricane" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
 
       <div class="slider-row">
