@@ -133,6 +133,7 @@ function sampleWaterSurfaceHeight(x, z, elapsed) {
 // 1. Subdivided Vertex-Displaced Ocean Surface
 const sharedCloudUniforms = atmosphere.getSharedGroundUniforms();
 const uRainSplashUniform = { value: 0.0 };
+const uTemperatureUniform = { value: 18.0 };
 const uHydroParamsA = { value: new THREE.Vector4(0.0, 280.0, 0.0, 0.0) };
 const uHydroParamsB = { value: new THREE.Vector4(0.0, -10.0, 0.0, 65.0) };
 const uTornadoStrengthUniform = { value: 0.0 };
@@ -155,6 +156,7 @@ oceanMat.onBeforeCompile = (shader) => {
     uSunDirAndElevation: sharedCloudUniforms.uSunDirAndElevation,
     uWorldOriginOffset: sharedCloudUniforms.uWorldOriginOffset,
     uRainIntensity: uRainSplashUniform,
+    uTemperature: uTemperatureUniform,
     uHydroA: uHydroParamsA,
     uHydroB: uHydroParamsB,
     uTornadoStrength: uTornadoStrengthUniform,
@@ -246,6 +248,7 @@ oceanMat.onBeforeCompile = (shader) => {
       uniform vec4 uSunDirAndElevation;
       uniform vec4 uWorldOriginOffset;
       uniform float uRainIntensity;
+      uniform float uTemperature;
 
       float rainRingPattern(vec2 p, float t) {
         vec2 cell = floor(p);
@@ -276,6 +279,11 @@ oceanMat.onBeforeCompile = (shader) => {
       if (uRainIntensity > 0.01) {
         float splash = (rainRingPattern(globalWaveXZ * 0.38, uWindAndTime.z) + rainRingPattern(globalWaveXZ * 0.52 + vec2(17.3, 9.1), uWindAndTime.z * 1.15)) * uRainIntensity;
         gl_FragColor.rgb += vec3(0.18, 0.25, 0.32) * splash;
+      }
+
+      float frost = clamp((1.0 - uTemperature) / 18.0, 0.0, 1.0);
+      if (frost > 0.01) {
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.76, 0.89, 0.96), frost * (0.28 + 0.55 * vFoamIntensity));
       }
 
       gl_FragColor.rgb *= mix(1.0, 0.42, cloudDensityShadow * 0.82);
@@ -378,6 +386,7 @@ function createMorphableTerrain() {
       uBoundsMaxAndCoverage: sharedCloudUniforms.uBoundsMaxAndCoverage,
       uSunDirAndElevation: sharedCloudUniforms.uSunDirAndElevation,
       uWorldOriginOffset: sharedCloudUniforms.uWorldOriginOffset,
+      uTemperature: uTemperatureUniform,
     });
 
     shader.vertexShader = shader.vertexShader
@@ -394,7 +403,8 @@ function createMorphableTerrain() {
         uniform vec4 uBoundsMinAndFade;
         uniform vec4 uBoundsMaxAndCoverage;
         uniform vec4 uSunDirAndElevation;
-        uniform vec4 uWorldOriginOffset;`
+        uniform vec4 uWorldOriginOffset;
+        uniform float uTemperature;`
       )
       .replace(
         '#include <dithering_fragment>',
@@ -405,6 +415,11 @@ function createMorphableTerrain() {
         vec2 weatherUV = (shadowWorldXZ - uBoundsMinAndFade.xz) / (uBoundsMaxAndCoverage.xz - uBoundsMinAndFade.xz) + uWindAndTime.xy * uWindAndTime.z * 0.00085;
         float cloudShadow = smoothstep(1.0 - uBoundsMaxAndCoverage.w * 1.35, 1.0, texture2D(uWeatherMap, weatherUV).r);
         float aboveCloudFade = 1.0 - smoothstep(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, vTerrainWorldPos.y);
+        float frost = clamp((4.0 - uTemperature) / 20.0, 0.0, 1.0);
+        if (frost > 0.01) {
+          float snowLine = smoothstep(mix(165.0, 10.0, frost), mix(210.0, 36.0, frost), vTerrainWorldPos.y);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.90, 0.95, 0.99), snowLine * (0.45 + 0.55 * frost));
+        }
         gl_FragColor.rgb *= mix(1.0, 0.45, cloudShadow * aboveCloudFade * 0.78);
         #include <dithering_fragment>`
       );
@@ -816,6 +831,180 @@ fleet.forEach((v) => {
   baseScene.add(v.group);
 });
 
+// 5b. Secret -20°C North Pole & Santa Sleigh Easter Egg (hidden unless temp <= -20°C)
+function createNorthPoleEasterEgg() {
+  const redMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.35, metalness: 0.15 });
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.6 });
+  const goldMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.25, metalness: 0.75 });
+  const brownMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 });
+  const rudolphMat = new THREE.MeshBasicMaterial({ color: 0xff1e1e });
+  const giftMats = [
+    new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.4 }),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.4 }),
+    goldMat,
+  ];
+
+  // Dress up every ASV boat as Santa / Santa's Sleigh
+  const boatOverlays = fleet.map((v) => {
+    const g = new THREE.Group();
+    g.visible = false;
+    for (const sx of [-1.75, 1.75]) {
+      const runner = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.38, 12.5), goldMat);
+      runner.position.set(sx, 0.25, 0.0);
+      g.add(runner);
+    }
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.55, 8.8), redMat);
+    trim.position.set(0, 1.35, -0.4);
+    g.add(trim);
+    const hatCone = new THREE.Mesh(new THREE.ConeGeometry(1.15, 2.5, 10), redMat);
+    hatCone.position.set(0, 5.2, -0.8);
+    g.add(hatCone);
+    const hatBrim = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.25, 0.38, 10), whiteMat);
+    hatBrim.position.set(0, 4.05, -0.8);
+    g.add(hatBrim);
+    const pom = new THREE.Mesh(new THREE.SphereGeometry(0.36, 8, 8), whiteMat);
+    pom.position.set(0, 6.45, -0.8);
+    g.add(pom);
+    giftMats.forEach((gm, idx) => {
+      const gift = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.85, 0.95), gm);
+      gift.position.set((idx - 1) * 0.95, 2.15, -3.2);
+      g.add(gift);
+    });
+    v.group.add(g);
+    return g;
+  });
+
+  // Barber-shop candy-cane North Pole on a mountain peak
+  const stripeCanvas = document.createElement('canvas');
+  stripeCanvas.width = 64;
+  stripeCanvas.height = 64;
+  const sctx = stripeCanvas.getContext('2d');
+  sctx.fillStyle = '#f8fafc';
+  sctx.fillRect(0, 0, 64, 64);
+  sctx.fillStyle = '#dc2626';
+  for (let i = -64; i < 128; i += 24) {
+    sctx.beginPath();
+    sctx.moveTo(i, 0);
+    sctx.lineTo(i + 12, 0);
+    sctx.lineTo(i + 76, 64);
+    sctx.lineTo(i + 64, 64);
+    sctx.closePath();
+    sctx.fill();
+  }
+  const caneTex = new THREE.CanvasTexture(stripeCanvas);
+  caneTex.wrapS = THREE.RepeatWrapping;
+  caneTex.wrapT = THREE.RepeatWrapping;
+  const caneMat = new THREE.MeshStandardMaterial({ map: caneTex, roughness: 0.25, metalness: 0.1 });
+
+  const northPoleGroup = new THREE.Group();
+  northPoleGroup.visible = false;
+  const poleMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 28, 14), caneMat);
+  poleMesh.position.y = 14;
+  northPoleGroup.add(poleMesh);
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(2.4, 12, 10), goldMat);
+  orb.position.y = 29;
+  northPoleGroup.add(orb);
+  const signBoard = new THREE.Mesh(new THREE.BoxGeometry(9.5, 2.4, 0.6), redMat);
+  signBoard.position.set(0, 22, 1.6);
+  northPoleGroup.add(signBoard);
+  baseScene.add(northPoleGroup);
+
+  // Flying Santa's Sleigh & 5 Reindeer (with Rudolph leading)
+  const flyingSleigh = new THREE.Group();
+  flyingSleigh.visible = false;
+  const sleighBody = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.0, 6.2), redMat);
+  sleighBody.position.set(0, 1.2, -3.5);
+  flyingSleigh.add(sleighBody);
+  for (const sx of [-1.7, 1.7]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.35, 7.6), goldMat);
+    rail.position.set(sx, 0.1, -3.5);
+    flyingSleigh.add(rail);
+  }
+  const santaTorso = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.15, 2.2, 8), redMat);
+  santaTorso.position.set(0, 2.7, -2.5);
+  flyingSleigh.add(santaTorso);
+  const santaBeard = new THREE.Mesh(new THREE.SphereGeometry(0.75, 8, 8), whiteMat);
+  santaBeard.position.set(0, 4.0, -2.2);
+  flyingSleigh.add(santaBeard);
+  const santaHat = new THREE.Mesh(new THREE.ConeGeometry(0.75, 1.6, 8), redMat);
+  santaHat.position.set(0, 4.9, -2.4);
+  flyingSleigh.add(santaHat);
+
+  const reindeerMeshes = [];
+  const deerOffsets = [
+    [-1.6, 4.0], [1.6, 4.0],
+    [-1.6, 9.0], [1.6, 9.0],
+    [0.0, 14.0], // Rudolph in front
+  ];
+  deerOffsets.forEach(([dx, dz], idx) => {
+    const deer = new THREE.Group();
+    deer.position.set(dx, 1.4, dz);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 2.4), brownMat);
+    deer.add(body);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.65, 1.0), brownMat);
+    head.position.set(0, 0.75, 1.25);
+    deer.add(head);
+    if (idx === deerOffsets.length - 1) {
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 8), rudolphMat);
+      nose.position.set(0, 0.75, 1.85);
+      deer.add(nose);
+    }
+    flyingSleigh.add(deer);
+    reindeerMeshes.push(deer);
+  });
+  baseScene.add(flyingSleigh);
+
+  return { boatOverlays, northPoleGroup, poleMesh, flyingSleigh, reindeerMeshes, sleighFwd: new THREE.Vector3(0, 0, 1) };
+}
+
+const northPoleEgg = createNorthPoleEasterEgg();
+const optCameraSanta = document.getElementById('opt-camera-santa');
+
+function updateNorthPoleEasterEgg(elapsed) {
+  const active = atmosphere.state.temperature <= -20;
+  for (const g of northPoleEgg.boatOverlays) g.visible = active;
+  northPoleEgg.northPoleGroup.visible = active;
+  northPoleEgg.flyingSleigh.visible = active;
+  optCameraSanta.hidden = !active;
+  if (!active) {
+    if (activeCameraView === 'santa') {
+      ctrlCameraView.value = 'free';
+      applyCameraView('free', true);
+    }
+    return;
+  }
+
+  const peakPos = terrain.sampleHeightAndGradient(-155, -40);
+  northPoleEgg.northPoleGroup.position.set(-155, Math.max(peakPos.h - 1.0, 10.0), -40);
+  northPoleEgg.poleMesh.rotation.y = elapsed * 1.4;
+
+  const ang = elapsed * 0.28;
+  const rx = Math.cos(ang) * 185;
+  const rz = Math.sin(ang) * 155;
+  const ry = 112 + Math.sin(elapsed * 0.85) * 14;
+  const nx = Math.cos(ang + 0.02) * 185;
+  const nz = Math.sin(ang + 0.02) * 155;
+  northPoleEgg.flyingSleigh.position.set(rx, ry, rz);
+  northPoleEgg.flyingSleigh.lookAt(nx, ry, nz);
+  northPoleEgg.sleighFwd.set(nx - rx, 0, nz - rz).normalize();
+  northPoleEgg.reindeerMeshes.forEach((d, idx) => {
+    d.position.y = 1.4 + Math.sin(elapsed * 6.5 + idx * 0.9) * 0.45;
+  });
+
+  if (activeCameraView === 'santa') {
+    if (_hasPrevBoatPos) {
+      const dx = rx - _prevBoatPos.x;
+      const dy = ry - _prevBoatPos.y;
+      const dz = rz - _prevBoatPos.z;
+      camera.position.set(camera.position.x + dx, camera.position.y + dy, camera.position.z + dz);
+      controls.target.set(controls.target.x + dx, controls.target.y + dy, controls.target.z + dz);
+      controls.update();
+    }
+    _prevBoatPos.set(rx, ry, rz);
+    _hasPrevBoatPos = true;
+  }
+}
+
 // 6. GPU-Accelerated 3D Rain Streak System
 function createPrecipitationSystem(dropCount = 9000) {
   const geo = new THREE.BufferGeometry();
@@ -847,6 +1036,7 @@ function createPrecipitationSystem(dropCount = 9000) {
       uWindXZ: { value: new THREE.Vector2(8.0, 5.0) },
       uCameraPos: { value: new THREE.Vector3() },
       uCloudBaseY: { value: 95.0 },
+      uTemperature: uTemperatureUniform,
     },
     vertexShader: /* glsl */ `
       attribute float aTip;
@@ -855,27 +1045,32 @@ function createPrecipitationSystem(dropCount = 9000) {
       uniform vec2 uWindXZ;
       uniform vec3 uCameraPos;
       uniform float uCloudBaseY;
+      uniform float uTemperature;
       varying float vAlpha;
 
       void main() {
         float cellSpan = 750.0;
         float maxH = max(uCloudBaseY + 25.0, 90.0);
         vec3 basePos = position;
-        float speed = 135.0 + fract(sin(basePos.x * 12.9898 + basePos.z * 78.233) * 43758.5453) * 45.0;
+        float snowMix = clamp((3.0 - uTemperature) / 5.0, 0.0, 1.0);
+        float speed = mix(135.0, 24.0, snowMix) + fract(sin(basePos.x * 12.9898 + basePos.z * 78.233) * 43758.5453) * mix(45.0, 14.0, snowMix);
         float yFall = mod(basePos.y - uTime * speed, maxH);
         vec2 relXZ = mod(basePos.xz - uCameraPos.xz + cellSpan * 0.5, cellSpan) - cellSpan * 0.5;
-        vec3 worldPos = vec3(uCameraPos.x + relXZ.x, yFall, uCameraPos.z + relXZ.z);
-        worldPos += normalize(vec3(uWindXZ.x * 0.35, -speed, uWindXZ.y * 0.35)) * mix(4.5, 9.5, uRainIntensity) * aTip;
+        vec3 flutter = vec3(sin(uTime * 1.9 + basePos.x) * 3.5, 0.0, cos(uTime * 1.6 + basePos.z) * 3.5) * snowMix;
+        vec3 worldPos = vec3(uCameraPos.x + relXZ.x, yFall, uCameraPos.z + relXZ.z) + flutter;
+        worldPos += normalize(vec3(uWindXZ.x * 0.35, -speed, uWindXZ.y * 0.35)) * mix(mix(4.5, 9.5, uRainIntensity), 0.9, snowMix) * aTip;
         float distFade = 1.0 - smoothstep(140.0, 370.0, length(worldPos.xz - uCameraPos.xz));
-        vAlpha = uRainIntensity * distFade * (aTip > 0.5 ? 0.55 : 0.08);
+        vAlpha = uRainIntensity * distFade * (aTip > 0.5 ? 0.55 : mix(0.08, 0.35, snowMix));
         gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
       }
     `,
     fragmentShader: /* glsl */ `
+      uniform float uTemperature;
       varying float vAlpha;
       void main() {
         if (vAlpha <= 0.005) discard;
-        gl_FragColor = vec4(0.78, 0.88, 0.98, vAlpha);
+        float snowMix = clamp((3.0 - uTemperature) / 5.0, 0.0, 1.0);
+        gl_FragColor = vec4(mix(vec3(0.78, 0.88, 0.98), vec3(0.95, 0.98, 1.0), snowMix), vAlpha);
       }
     `,
   });
@@ -1011,11 +1206,13 @@ function syncSceneLighting() {
   baseScene.fog.color.copy(baseScene.background);
   baseScene.fog.density = 0.00005 + s.fogDensity * 0.0022 + s.rainIntensity * 0.00035;
 
-  uRainSplashUniform.value = s.rainIntensity;
+  uTemperatureUniform.value = s.temperature;
+  const effectivePrecip = Math.max(s.rainIntensity, s.temperature <= 0 ? 0.45 : 0.0);
+  uRainSplashUniform.value = s.temperature <= 0 ? 0.0 : s.rainIntensity;
   uTornadoStrengthUniform.value = hydroState.tornadoStrength;
 
-  rainSystem.lines.visible = s.rainIntensity > 0.01;
-  rainSystem.mat.uniforms.uRainIntensity.value = s.rainIntensity;
+  rainSystem.lines.visible = effectivePrecip > 0.01;
+  rainSystem.mat.uniforms.uRainIntensity.value = effectivePrecip;
   rainSystem.mat.uniforms.uCloudBaseY.value = s.baseAltitude;
 
   lightningSystem.lines.visible = s.lightningIntensity > 0.01;
@@ -1040,6 +1237,7 @@ const ctrlDensity = $('ctrl-density');
 const ctrlRain = $('ctrl-rain');
 const ctrlLightning = $('ctrl-lightning');
 const ctrlFog = $('ctrl-fog');
+const ctrlTemp = $('ctrl-temp');
 const ctrlBase = $('ctrl-base');
 const ctrlSun = $('ctrl-sun');
 const ctrlWind = $('ctrl-wind');
@@ -1075,6 +1273,14 @@ function formatTideLabel(lvl) {
   return `${sign}${lvl.toFixed(1)} m (Mean Tide)`;
 }
 
+function formatTempLabel(temp) {
+  if (temp <= -10) return `${temp}°C (Polar Freeze / Snow)`;
+  if (temp <= 2) return `${temp}°C (Freezing / Sleet & Ice)`;
+  if (temp >= 34) return `${temp}°C (Extreme Heat / High CAPE)`;
+  if (temp >= 25) return `${temp}°C (Warm / Convective)`;
+  return `${temp}°C (Temperate)`;
+}
+
 function refreshControlReadouts() {
   const s = atmosphere.state;
   ctrlStorm.value = s.stormType;
@@ -1092,6 +1298,8 @@ function refreshControlReadouts() {
   ctrlRain.value = s.rainIntensity;
   ctrlLightning.value = s.lightningIntensity;
   ctrlFog.value = s.fogDensity;
+  ctrlTemp.value = s.temperature;
+  optCameraSanta.hidden = s.temperature > -20;
   ctrlBase.value = s.baseAltitude;
   ctrlSun.value = s.sunElevationDeg;
   ctrlWind.value = s.windSpeed;
@@ -1111,6 +1319,7 @@ function refreshControlReadouts() {
   $('val-rain').textContent = `${Math.round(s.rainIntensity * 100)}%`;
   $('val-lightning').textContent = `${Math.round(s.lightningIntensity * 100)}%`;
   $('val-fog').textContent = `${Math.round(s.fogDensity * 100)}%`;
+  $('val-temp').textContent = formatTempLabel(s.temperature);
   $('val-base').textContent = `${s.baseAltitude} m`;
   $('val-sun').textContent = `${s.sunElevationDeg}°`;
   $('val-wind').textContent = `${s.windSpeed} m/s`;
@@ -1209,6 +1418,7 @@ for (const [el, key, needsLightSync] of [
   [ctrlRain, 'rainIntensity', true],
   [ctrlLightning, 'lightningIntensity', true],
   [ctrlFog, 'fogDensity', true],
+  [ctrlTemp, 'temperature', true],
   [ctrlBase, 'baseAltitude', true],
   [ctrlSun, 'sunElevationDeg', true],
   [ctrlWind, 'windSpeed', false],
@@ -1240,6 +1450,18 @@ function applyCameraView(view, snap = true) {
       camera.position.set(-165, 64, 265);
       controls.target.set(0, 68, 0);
     }
+    controls.update();
+    return;
+  }
+  if (view === 'santa') {
+    const p = northPoleEgg.flyingSleigh.position;
+    const f = northPoleEgg.sleighFwd;
+    if (snap) {
+      camera.position.set(p.x - f.x * 16, p.y + 8.5, p.z - f.z * 16);
+      controls.target.set(p.x + f.x * 24, p.y + 2.5, p.z + f.z * 24);
+    }
+    _prevBoatPos.copy(p);
+    _hasPrevBoatPos = true;
     controls.update();
     return;
   }
@@ -1438,7 +1660,7 @@ function animate(now) {
     v.fwd.copy(_fwdVec);
   }
 
-  if (activeCameraView !== 'free') {
+  if (activeCameraView.startsWith('boat-')) {
     const vessel = fleet[parseInt(activeCameraView.slice(5), 10)] || fleet[0];
     const bp = vessel.group.position;
     if (_hasPrevBoatPos) {
@@ -1453,9 +1675,11 @@ function animate(now) {
     _hasPrevBoatPos = true;
   }
 
+  const temp = atmosphere.state.temperature;
+  const thermalScale = 1.0 + Math.max(0, Math.min(1, (temp - 24) / 21)) * 0.42 - Math.max(0, Math.min(1, (2 - temp) / 22)) * 0.18;
   const windAngle = THREE.MathUtils.degToRad(32);
-  _windVecXZ.x = Math.cos(windAngle) * atmosphere.state.windSpeed;
-  _windVecXZ.y = Math.sin(windAngle) * atmosphere.state.windSpeed;
+  _windVecXZ.x = Math.cos(windAngle) * atmosphere.state.windSpeed * thermalScale;
+  _windVecXZ.y = Math.sin(windAngle) * atmosphere.state.windSpeed * thermalScale;
   _tornadoCenterXZ.x = tornadoX;
   _tornadoCenterXZ.y = tornadoZ;
   _whirlpoolCenterXZ.x = hydroState.whirlpoolX;
@@ -1469,6 +1693,7 @@ function animate(now) {
   _particleParams.waterLevel = hydroState.waterLevel;
   _particleParams.cloudBaseY = atmosphere.state.baseAltitude;
   fluidClusterParticles.update(dt, _particleParams);
+  updateNorthPoleEasterEgg(elapsed);
 
   if (rainSystem.lines.visible) {
     rainSystem.mat.uniforms.uTime.value = elapsed;
