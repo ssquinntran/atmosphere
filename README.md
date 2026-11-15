@@ -189,3 +189,8 @@ npm run dev
 # Run all 14 Unit, Front-End & Live 4-Phase Experiment Suites with V8 Coverage
 npm test
 ```
+
+## Navigation & Controls
+
+- **Mouse / Trackpad:** `Left-drag` to orbit · `Shift + Left-drag` or `Right-drag` to pan · `Scroll` / pinch to zoom
+- **Keyboard:** `WASD` / `Arrow keys` to fly (`Shift` for 2× speed) · `E` / `+` zoom in · `Q` / `-` zoom out · `R` reset camera · `1`–`4` shader debug modes

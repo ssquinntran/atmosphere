@@ -1,9 +1,11 @@
+import { CLOUD_GENERA, STORM_TYPES } from './src/layers/AtmosphereLayer.js';
+
 export const SCENARIOS_10 = [
   {
     id: 1,
     file: 'scenario_01_ef5_supercell_tornado.webm',
     title: '01 · EF5 Supercell Wedge Tornado & Branched 3D Lightning',
-    subtitle: 'Rankine Vortex Funnel + Cumulonimbus Anvil + Cloud-to-Sea Bolts + 36 m/s Gale',
+    presetBtn: 'EF5 Tornado',
     stormType: 'supercellTornado',
     cloudGenus: 'cumulonimbus',
     debugMode: 0,
@@ -34,7 +36,7 @@ export const SCENARIOS_10 = [
     id: 2,
     file: 'scenario_02_cat5_hurricane_eyewall.webm',
     title: '02 · Category-5 Hurricane Eyewall & Spiral Rainbands',
-    subtitle: 'Stadium Eyewall + Calm Eye + Logarithmic Spiral Bands + 40 m/s Cyclonic Gale',
+    presetBtn: 'Cat-5 Hurricane',
     stormType: 'hurricane',
     cloudGenus: 'cumulonimbus',
     debugMode: 0,
@@ -65,7 +67,7 @@ export const SCENARIOS_10 = [
     id: 3,
     file: 'scenario_03_waterspout_whirlpool_dsu.webm',
     title: '03 · Dual-Vortex Coupling: Maritime Waterspout + Whirlpool Maelstrom',
-    subtitle: 'Rankine Waterspout Tube + Abyssal Sea Depression + 512 Union-Find DSU Particles',
+    presetBtn: 'EF5 Tornado',
     stormType: 'waterspout',
     cloudGenus: 'cumulonimbus',
     debugMode: 0,
@@ -96,7 +98,7 @@ export const SCENARIOS_10 = [
     id: 4,
     file: 'scenario_04_derecho_arcus_tsunami.webm',
     title: '04 · Derecho Squall Line Shelf Cloud & Giant Tsunami Soliton Wave',
-    subtitle: 'Bow-Echo Arcus Roll Cloud + Vertex-Displaced Tsunami Crest Lifting ASV Fleet',
+    presetBtn: 'EF5 Tornado',
     stormType: 'derecho',
     cloudGenus: 'cumulonimbus',
     debugMode: 0,
@@ -127,7 +129,7 @@ export const SCENARIOS_10 = [
     id: 5,
     file: 'scenario_05_noreaster_bomb_cyclone.webm',
     title: "05 · Nor'easter Bomb Cyclone & +11.5m King-Tide Canyon Surge",
-    subtitle: 'Baroclinic Comma-Head Cloud Shield + Extreme Storm Tide Flooding Coastal Gorge',
+    presetBtn: 'Cat-5 Hurricane',
     stormType: 'norEaster',
     cloudGenus: 'nimbostratus',
     debugMode: 0,
@@ -158,7 +160,7 @@ export const SCENARIOS_10 = [
     id: 6,
     file: 'scenario_06_dusk_lightning_barrage.webm',
     title: '06 · Golden-Dusk Supercell & 100% Branched 3D Lightning Barrage',
-    subtitle: 'Warm Sunset Sun + Continuous 3D Cloud-to-Sea Bolts & Volumetric Sheet Flash',
+    presetBtn: 'EF5 Tornado',
     stormType: 'supercellTornado',
     cloudGenus: 'cumulonimbus',
     debugMode: 0,
@@ -190,7 +192,7 @@ export const SCENARIOS_10 = [
     id: 7,
     file: 'scenario_07_dense_advection_sea_fog.webm',
     title: '07 · Heavy Beer-Lambert Advection Sea Fog & Low Stratus Deck',
-    subtitle: '100% Atmospheric Fog + Low 55m Stratus Ceiling + Saronic ASV Fleet Patrol',
+    presetBtn: 'Trade Winds',
     stormType: 'none',
     cloudGenus: 'stratus',
     debugMode: 0,
@@ -221,7 +223,7 @@ export const SCENARIOS_10 = [
     id: 8,
     file: 'scenario_08_golden_hour_archipelago.webm',
     title: '08 · Trade-Winds Coastal Archipelago & Silver-Lining Cumulus',
-    subtitle: 'Dual-Lobe Henyey-Greenstein Scattering + Powder Sugar-Cloud Effect + Island DSU',
+    presetBtn: 'Trade Winds',
     stormType: 'none',
     cloudGenus: 'cumulus',
     debugMode: 0,
@@ -252,7 +254,7 @@ export const SCENARIOS_10 = [
     id: 9,
     file: 'scenario_09_beer_lambert_transmittance.webm',
     title: '09 · Shader Pass 2: Beer-Lambert Optical Transmittance Heatmap',
-    subtitle: 'T = exp(-σ_t · s) Opacity Map (White/Cyan = Clear Sky 1.0, Coral = Opaque Funnel 0.0)',
+    presetBtn: 'EF5 Tornado',
     stormType: 'supercellTornado',
     cloudGenus: 'cumulonimbus',
     debugMode: 1,
@@ -283,7 +285,7 @@ export const SCENARIOS_10 = [
     id: 10,
     file: 'scenario_10_3d_noise_topographic_airflow.webm',
     title: '10 · Shader Pass 4: 3D Perlin-Worley Noise & Topographic Airflow Slice',
-    subtitle: 'RGB = 64³ Curl-Noise Cloud Atlas Channels + Orographic Mountain-Wave Updraft Contours',
+    presetBtn: 'Cat-5 Hurricane',
     stormType: 'hurricane',
     cloudGenus: 'altocumulus',
     debugMode: 3,
@@ -348,55 +350,229 @@ function applyScenarioState(ctx, sc) {
   refreshControlReadouts();
 }
 
-function drawHudOverlay(ctx2d, w, h, sc, simCtx, progress) {
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = '';
+  let curY = y;
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    if (ctx.measureText(testLine).width > maxWidth && n > 0) {
+      ctx.fillText(line, x, curY);
+      line = words[n] + ' ';
+      curY += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line, x, curY);
+  return curY + lineHeight;
+}
+
+const DEBUG_NAMES = [
+  '1: Final Composite (Lit Clouds + Rain)',
+  '2: Optical Transmittance T (Cloud Opacity Map)',
+  '3: Radial Scene Depth tScene (50m Contours)',
+  '4: 3D Noise & Topographic Airflow Slice',
+];
+
+// Renders the exact left .hud-header card and right .hud-controls panel from the screenshots
+function drawScreenshotStyleHud(ctx2d, w, h, sc, simCtx) {
   const s = simCtx.atmosphere.state;
   const p = simCtx.fluidClusterParticles;
   const t = simCtx.terrainState;
+  const hs = simCtx.hydroState;
+  const genusMeta = CLOUD_GENERA[s.cloudGenus] || CLOUD_GENERA.cumulus;
+  const stormMeta = STORM_TYPES[s.stormType] || STORM_TYPES.none;
 
-  // Top banner
-  ctx2d.fillStyle = 'rgba(7, 13, 22, 0.84)';
-  ctx2d.fillRect(16, 14, w - 32, 60);
-  ctx2d.strokeStyle = 'rgba(56, 189, 248, 0.6)';
-  ctx2d.lineWidth = 1.5;
-  ctx2d.strokeRect(16, 14, w - 32, 60);
+  // 1. Left .hud-header Card (matches index.html .hud-header)
+  const lx = 14, ly = 14, lw = 350, lh = 165;
+  roundRect(ctx2d, lx, ly, lw, lh, 8);
+  ctx2d.fillStyle = 'rgba(11, 17, 26, 0.88)';
+  ctx2d.fill();
+  ctx2d.strokeStyle = 'rgba(110, 168, 224, 0.28)';
+  ctx2d.lineWidth = 1;
+  ctx2d.stroke();
 
   ctx2d.fillStyle = '#38bdf8';
-  ctx2d.font = 'bold 15.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  ctx2d.fillText(sc.title, 28, 39);
+  ctx2d.font = '600 12.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx2d.fillText('ATMOSPHERE LAYER // WEBGL2', lx + 14, ly + 24);
+
+  ctx2d.fillStyle = '#94a3b8';
+  ctx2d.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  let nextY = wrapText(
+    ctx2d,
+    'Volumetric clouds (10 WMO genera), 6 storm regimes, 3D lightning, vertex-displaced tsunami & whirlpool waves, Spatial-Hash + Union-Find physics, and Saronic ASV fleet.',
+    lx + 14,
+    ly + 42,
+    lw - 28,
+    15
+  );
+
+  ctx2d.strokeStyle = 'rgba(110, 168, 224, 0.18)';
+  ctx2d.beginPath();
+  ctx2d.moveTo(lx + 14, nextY - 4);
+  ctx2d.lineTo(lx + lw - 14, nextY - 4);
+  ctx2d.stroke();
+
+  ctx2d.fillStyle = '#38bdf8';
+  ctx2d.font = 'bold 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx2d.fillText(sc.title, lx + 14, nextY + 12);
 
   ctx2d.fillStyle = '#cbd5e1';
-  ctx2d.font = '12.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx2d.fillText(sc.subtitle, 28, 60);
+  ctx2d.font = '10.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  wrapText(
+    ctx2d,
+    `[${stormMeta.name}] ${genusMeta.name} · ${genusMeta.etage}: ${genusMeta.description}`,
+    lx + 14,
+    nextY + 28,
+    lw - 28,
+    14
+  );
 
-  ctx2d.fillStyle = '#38bdf8';
-  ctx2d.fillRect(16, 71, (w - 32) * Math.min(1, Math.max(0, progress)), 3);
+  // 2. Right .hud-controls Panel (matches index.html .hud-controls)
+  const rw = 296, rx = w - rw - 14, ry = 14, rh = h - 28;
+  roundRect(ctx2d, rx, ry, rw, rh, 8);
+  ctx2d.fillStyle = 'rgba(11, 17, 26, 0.88)';
+  ctx2d.fill();
+  ctx2d.strokeStyle = 'rgba(110, 168, 224, 0.28)';
+  ctx2d.stroke();
 
-  // Bottom telemetry bar
-  ctx2d.fillStyle = 'rgba(7, 13, 22, 0.86)';
-  ctx2d.fillRect(16, h - 42, w - 32, 28);
-  ctx2d.strokeStyle = 'rgba(110, 168, 224, 0.4)';
-  ctx2d.strokeRect(16, h - 42, w - 32, 28);
+  let cy = ry + 18;
+  ctx2d.fillStyle = '#94a3b8';
+  ctx2d.font = '700 9.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx2d.fillText('OPERATIONAL WEATHER & STORM PRESETS', rx + 12, cy);
+  cy += 8;
 
-  const metrics = [
-    `STORM: ${s.stormType}`,
-    `GENUS: ${s.cloudGenus}`,
-    `COV: ${Math.round(s.coverage * 100)}%`,
-    `WIND: ${s.windSpeed}m/s`,
-    `BOLTS: ${Math.round(s.lightningIntensity * 100)}%`,
-    `FOG: ${Math.round(s.fogDensity * 100)}%`,
-    `DSU: ${p.activeClusters} (MAX ${p.largestCluster})`,
-    `TOPO: ${t.islandCount}I/${t.waterBasinCount}S`,
-  ].join('  |  ');
+  const presets = ['Trade Winds', 'High Cirrus', 'EF5 Tornado', 'Cat-5 Hurricane'];
+  const bw = (rw - 30) / 2, bh = 22;
+  presets.forEach((name, idx) => {
+    const col = idx % 2, row = Math.floor(idx / 2);
+    const bx = rx + 12 + col * (bw + 6);
+    const by = cy + row * (bh + 5);
+    const active = sc.presetBtn === name;
+    roundRect(ctx2d, bx, by, bw, bh, 4);
+    ctx2d.fillStyle = active ? 'rgba(56, 189, 248, 0.18)' : 'rgba(30, 41, 59, 0.75)';
+    ctx2d.fill();
+    ctx2d.strokeStyle = active ? '#38bdf8' : 'rgba(110, 168, 224, 0.24)';
+    ctx2d.stroke();
+    ctx2d.fillStyle = active ? '#ffffff' : '#e2e8f0';
+    ctx2d.font = `${active ? '600' : '400'} 10.5px -apple-system, BlinkMacSystemFont, sans-serif`;
+    ctx2d.fillText(name, bx + 10, by + 15);
+  });
+  cy += 60;
 
-  ctx2d.fillStyle = '#f8fafc';
-  ctx2d.font = 'bold 11px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx2d.fillText(metrics, 26, h - 24);
+  // Select boxes (Storm, Genus, Debug View)
+  const selects = [
+    ['STORM SYSTEM REGIME (6 TYPES)', stormMeta.name],
+    ['WMO CLOUD GENUS (10 TYPES)', genusMeta.name],
+    ['SHADER DEBUG VIEW (KEYS 1–4)', DEBUG_NAMES[s.debugMode] || DEBUG_NAMES[0]],
+  ];
+  for (const [label, val] of selects) {
+    ctx2d.fillStyle = '#94a3b8';
+    ctx2d.font = '700 9px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx2d.fillText(label, rx + 12, cy);
+    cy += 5;
+    roundRect(ctx2d, rx + 12, cy, rw - 24, 21, 4);
+    ctx2d.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx2d.fill();
+    ctx2d.strokeStyle = 'rgba(110, 168, 224, 0.26)';
+    ctx2d.stroke();
+    ctx2d.fillStyle = '#e2e8f0';
+    ctx2d.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx2d.fillText(val, rx + 18, cy + 14);
+    cy += 29;
+  }
+
+  // Sliders (Vortex, Hurricane, Tsunami, Whirlpool, Tide, Morph, Coverage, Lightning, Fog)
+  ctx2d.fillStyle = '#94a3b8';
+  ctx2d.font = '700 9px -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx2d.fillText('VORTEX, TSUNAMI, WHIRLPOOL, LIGHTNING & FOG', rx + 12, cy);
+  cy += 8;
+
+  const sliders = [
+    ['Tornado / Waterspout Vortex', `${Math.round(hs.tornadoStrength * 100)}%`, hs.tornadoStrength],
+    ['Hurricane Eyewall & Bands', `${Math.round(hs.hurricaneStrength * 100)}%`, hs.hurricaneStrength],
+    ['Tsunami Soliton Wave', `${Math.round(hs.tsunamiStrength * 100)}%`, hs.tsunamiStrength],
+    ['Whirlpool Maelstrom', `${Math.round(hs.whirlpoolStrength * 100)}%`, hs.whirlpoolStrength],
+    ['Tidal Sea Level', simCtx.formatTideLabel(hs.waterLevel), (hs.waterLevel + 5) / 17],
+    ['Islands → Canyon Morph', simCtx.formatMorphLabel(t.morph), t.morph],
+    ['Cloud Coverage', `${Math.round(s.coverage * 100)}%`, s.coverage],
+    ['Lightning Bolts & Flash', `${Math.round(s.lightningIntensity * 100)}%`, s.lightningIntensity],
+    ['Atmospheric Fog & Haze', `${Math.round(s.fogDensity * 100)}%`, s.fogDensity],
+  ];
+
+  const sw = rw - 24;
+  for (const [label, valStr, norm] of sliders) {
+    ctx2d.fillStyle = '#e2e8f0';
+    ctx2d.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx2d.fillText(label, rx + 12, cy + 8);
+    ctx2d.fillStyle = '#38bdf8';
+    ctx2d.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const tw = ctx2d.measureText(valStr).width;
+    ctx2d.fillText(valStr, rx + rw - 12 - tw, cy + 8);
+
+    // Slider track
+    const ty = cy + 13;
+    const clamped = Math.min(1, Math.max(0, norm));
+    roundRect(ctx2d, rx + 12, ty, sw, 4, 2);
+    ctx2d.fillStyle = 'rgba(51, 65, 85, 0.85)';
+    ctx2d.fill();
+    roundRect(ctx2d, rx + 12, ty, Math.max(4, sw * clamped), 4, 2);
+    ctx2d.fillStyle = '#38bdf8';
+    ctx2d.fill();
+
+    ctx2d.beginPath();
+    ctx2d.arc(rx + 12 + sw * clamped, ty + 2, 4.5, 0, Math.PI * 2);
+    ctx2d.fillStyle = '#38bdf8';
+    ctx2d.fill();
+
+    cy += 22;
+  }
+
+  // Bottom 2x2 Telemetry Grid (matches .telemetry-grid)
+  cy += 4;
+  ctx2d.fillStyle = '#94a3b8';
+  ctx2d.font = '700 9px -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx2d.fillText('LIVE FRAME & UNION-FIND TELEMETRY', rx + 12, cy);
+  cy += 5;
+
+  roundRect(ctx2d, rx + 12, cy, rw - 24, 52, 6);
+  ctx2d.fillStyle = 'rgba(7, 13, 20, 0.78)';
+  ctx2d.fill();
+  ctx2d.strokeStyle = 'rgba(110, 168, 224, 0.18)';
+  ctx2d.stroke();
+
+  const tele = [
+    ['Frame Rate', document.getElementById('stat-fps')?.textContent || '30 FPS', 0, 0],
+    ['Cloud GPU Pass', document.getElementById('stat-gpu')?.textContent || '14.2 ms', 1, 0],
+    ['Union-Find Clusters', `${p.activeClusters} (Max: ${p.largestCluster})`, 0, 1],
+    ['DSU Land / Water', `${t.islandCount} Isl / ${t.waterBasinCount} Sea`, 1, 1],
+  ];
+  for (const [k, v, col, row] of tele) {
+    const tx = rx + 20 + col * ((rw - 36) / 2);
+    const ty = cy + 13 + row * 22;
+    ctx2d.fillStyle = '#94a3b8';
+    ctx2d.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx2d.fillText(k, tx, ty);
+    ctx2d.fillStyle = '#f8fafc';
+    ctx2d.font = '600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx2d.fillText(v, tx, ty + 11);
+  }
 }
 
 async function recordSingleScenario(simCtx, sc, recCanvas, recCtx, durationMs = 2300) {
   applyScenarioState(simCtx, sc);
 
-  // Let 2 frames render with the new state before starting MediaRecorder
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
   const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
@@ -406,7 +582,7 @@ async function recordSingleScenario(simCtx, sc, recCanvas, recCtx, durationMs = 
       : 'video/webm';
 
   const stream = recCanvas.captureStream(30);
-  const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 3800000 });
+  const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4000000 });
   const chunks = [];
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) chunks.push(e.data);
@@ -432,7 +608,7 @@ async function recordSingleScenario(simCtx, sc, recCanvas, recCtx, durationMs = 
       simCtx.controls.update();
 
       recCtx.drawImage(simCtx.renderer.domElement, 0, 0, recCanvas.width, recCanvas.height);
-      drawHudOverlay(recCtx, recCanvas.width, recCanvas.height, sc, simCtx, u);
+      drawScreenshotStyleHud(recCtx, recCanvas.width, recCanvas.height, sc, simCtx);
 
       if (u < 1) {
         requestAnimationFrame(stepFrame);
