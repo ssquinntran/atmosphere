@@ -6,10 +6,13 @@ import {
   analyzeTerrainTopologyUnionFind,
 } from './physics/FluidClusterPhysics.js';
 
-const canvas = document.getElementById('viewport');
+const $ = (id) => document.getElementById(id);
+
+const canvas = $('viewport');
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: false,
+  preserveDrawingBuffer: true,
   powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
@@ -17,32 +20,29 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
 
-// Base scene (rendered to offscreen target so hardware depth is available to clouds)
 const baseScene = new THREE.Scene();
 baseScene.background = new THREE.Color(0x4f86c6);
 baseScene.fog = new THREE.FogExp2(0x5b8ec8, 0.00055);
 
-// Overlay scene containing only the volumetric AtmosphereLayer proxy slab
 const atmosphereScene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(
-  54,
-  window.innerWidth / window.innerHeight,
-  1.0,
-  3500.0
-);
+const camera = new THREE.PerspectiveCamera(54, window.innerWidth / window.innerHeight, 1.0, 3500.0);
 camera.position.set(-165, 64, 265);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 68, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
+controls.enableZoom = true;
+controls.enablePan = true;
+controls.screenSpacePanning = true;
+controls.zoomSpeed = 1.35;
+controls.panSpeed = 1.25;
 controls.maxPolarAngle = Math.PI * 0.495;
 controls.minDistance = 25;
 controls.maxDistance = 950;
 controls.update();
 
-// Offscreen WebGLRenderTarget with hardware DepthTexture
 const drawingSize = new THREE.Vector2();
 renderer.getDrawingBufferSize(drawingSize);
 
@@ -56,7 +56,6 @@ const sceneTarget = new THREE.WebGLRenderTarget(drawingSize.x, drawingSize.y, {
   depthTexture,
 });
 
-// Hardware-accelerated half-resolution (0.5x) offscreen volumetric cloud render target (4x fewer raymarch fragments)
 const CLOUD_RES_SCALE = 0.5;
 const cloudTarget = new THREE.WebGLRenderTarget(
   Math.max(1, Math.floor(drawingSize.x * CLOUD_RES_SCALE)),
@@ -70,99 +69,72 @@ const cloudTarget = new THREE.WebGLRenderTarget(
   }
 );
 
-// Initialize AtmosphereLayer and expose handle on window for DevTools RTC/debug inspection
 const atmosphere = new AtmosphereLayer({ mapExtent: 1200, maxSteps: 36 });
 atmosphere.init(renderer, atmosphereScene);
 atmosphere.setSceneDepthTexture(depthTexture);
 atmosphere.resize(cloudTarget.width, cloudTarget.height);
 window.atmosphereLayer = atmosphere;
 
-// Lighting for maritime terrain & Saronic surface vessels
 const sunLight = new THREE.DirectionalLight(0xfff5e0, 2.8);
 baseScene.add(sunLight);
+baseScene.add(new THREE.HemisphereLight(0x8ec5fc, 0x0b253a, 1.08));
 
-const hemiLight = new THREE.HemisphereLight(0x8ec5fc, 0x0b253a, 1.08);
-baseScene.add(hemiLight);
+const getMainFjordX = (z) => Math.sin(z * 0.0065) * 65.0 + Math.cos(z * 0.014) * 20.0;
+const getCrossGorgeZ = (x) => Math.cos(x * 0.0068) * 48.0 - 10.0;
 
-// Shared analytical waterway centerline functions so gorges are ALWAYS flooded and boats follow them
-function getMainFjordX(z) {
-  return Math.sin(z * 0.0065) * 65.0 + Math.cos(z * 0.014) * 20.0;
-}
-
-function getCrossGorgeZ(x) {
-  return Math.cos(x * 0.0068) * 48.0 - 10.0;
-}
-
-// Extreme Maritime & Atmospheric Hydrodynamics State
 const hydroState = {
-  tornadoStrength: 0.0,   // [0..1] Rankine waterspout / EF5 wedge tornado funnel
-  hurricaneStrength: 0.0, // [0..1] Category 5 Hurricane eyewall, spiral bands & storm surge dome
+  tornadoStrength: 0.0,
+  hurricaneStrength: 0.0,
   tornadoX: 0.0,
   tornadoZ: 65.0,
-  tsunamiStrength: 0.0,   // [0..1] Soliton tsunami wave wall propagating through fjord channel
+  tsunamiStrength: 0.0,
   tsunamiZ: 280.0,
-  whirlpoolStrength: 0.0, // [0..1] Maelstrom vortex pit at central canyon junction (0, -10)
+  whirlpoolStrength: 0.0,
   whirlpoolX: 0.0,
   whirlpoolZ: -10.0,
-  waterLevel: 0.0,        // [-5m..+12m] Tidal sea level (in & out)
+  waterLevel: 0.0,
 };
 
-// CPU/GPU synchronized water surface elevation & normal evaluator (for ASV pitch/roll & particle buoyancy)
 function sampleWaterSurfaceHeight(x, z, elapsed) {
-  let y = hydroState.waterLevel;
+  let y = hydroState.waterLevel + Math.sin(x * 0.045 + elapsed * 1.9) * 0.55 + Math.cos(z * 0.038 - elapsed * 1.6) * 0.45;
 
-  // 1. Ambient Gerstner swell waves
-  y +=
-    Math.sin(x * 0.045 + elapsed * 1.9) * 0.55 +
-    Math.cos(z * 0.038 - elapsed * 1.6) * 0.45;
-
-  // 2. Tsunami soliton wave wall propagating Northward along Z
   if (hydroState.tsunamiStrength > 0.01) {
     const dz = z - hydroState.tsunamiZ;
-    const soliton = Math.exp(-(dz * dz) / (2.0 * 34.0 * 34.0));
-    const steepFront = 1.0 + 0.35 * Math.tanh(-dz * 0.08);
-    y += 26.0 * hydroState.tsunamiStrength * soliton * steepFront;
+    y += 26.0 * hydroState.tsunamiStrength * Math.exp(-(dz * dz) / 2312.0) * (1.0 + 0.35 * Math.tanh(-dz * 0.08));
   }
 
-  // 3. Whirlpool maelstrom vortex pit at canyon junction
   if (hydroState.whirlpoolStrength > 0.01) {
     const dx = x - hydroState.whirlpoolX;
     const dz = z - hydroState.whirlpoolZ;
     const r2 = dx * dx + dz * dz;
-    const pit = Math.exp(-r2 / (2.0 * 44.0 * 44.0));
-    const rimWave = Math.sin(Math.sqrt(r2) * 0.16 - elapsed * 6.5) * Math.exp(-r2 / (2.0 * 75.0 * 75.0));
-    y -= 15.5 * hydroState.whirlpoolStrength * pit;
-    y += 1.8 * hydroState.whirlpoolStrength * rimWave;
+    y -= 15.5 * hydroState.whirlpoolStrength * Math.exp(-r2 / 3872.0);
+    y += 1.8 * hydroState.whirlpoolStrength * Math.sin(Math.sqrt(r2) * 0.16 - elapsed * 6.5) * Math.exp(-r2 / 11250.0);
   }
 
-  // 4. Tornado touchdown spray mound / pressure depression
   if (hydroState.tornadoStrength > 0.01) {
     const dx = x - hydroState.tornadoX;
     const dz = z - hydroState.tornadoZ;
-    const r = Math.sqrt(dx * dx + dz * dz);
-    const ring = Math.exp(-Math.pow((r - 24.0) / 14.0, 2.0));
-    y += 2.6 * hydroState.tornadoStrength * ring;
+    const dr = Math.sqrt(dx * dx + dz * dz) - 24.0;
+    y += 2.6 * hydroState.tornadoStrength * Math.exp(-(dr * dr) / 196.0);
   }
 
-  // 5. Category 5 Hurricane inverted-barometer storm surge dome + eyewall wave ring
   if (hydroState.hurricaneStrength > 0.01) {
     const dx = x - hydroState.tornadoX;
     const dz = z - hydroState.tornadoZ;
     const r2 = dx * dx + dz * dz;
     const r = Math.sqrt(r2);
-    const surgeDome = Math.exp(-r2 / (2.0 * 115.0 * 115.0));
-    const eyewallChop = Math.sin(r * 0.11 - elapsed * 5.2) * Math.exp(-Math.pow((r - 88.0) / 38.0, 2.0));
-    y += (5.2 * surgeDome + 3.4 * eyewallChop) * hydroState.hurricaneStrength;
+    const dr = (r - 88.0) / 38.0;
+    y += (5.2 * Math.exp(-r2 / 26450.0) + 3.4 * Math.sin(r * 0.11 - elapsed * 5.2) * Math.exp(-(dr * dr))) * hydroState.hurricaneStrength;
   }
 
   return y;
 }
 
-// 1. Subdivided Vertex-Displaced Ocean Surface (Tides, Tsunami Soliton Wave, Whirlpool Vortex & Cloud Shadows)
+// 1. Subdivided Vertex-Displaced Ocean Surface
 const sharedCloudUniforms = atmosphere.getSharedGroundUniforms();
 const uRainSplashUniform = { value: 0.0 };
-const uHydroParamsA = { value: new THREE.Vector4(0.0, 280.0, 0.0, 0.0) }; // x: tsunamiStrength, y: tsunamiZ, z: whirlpoolStrength, w: waterLevel
-const uHydroParamsB = { value: new THREE.Vector4(0.0, -10.0, 0.0, 65.0) }; // xy: whirlpoolXZ, zw: tornadoXZ
+const uHydroParamsA = { value: new THREE.Vector4(0.0, 280.0, 0.0, 0.0) };
+const uHydroParamsB = { value: new THREE.Vector4(0.0, -10.0, 0.0, 65.0) };
 const uTornadoStrengthUniform = { value: 0.0 };
 
 const oceanGeo = new THREE.PlaneGeometry(1400, 1400, 128, 128);
@@ -175,16 +147,18 @@ const oceanMat = new THREE.MeshStandardMaterial({
 });
 
 oceanMat.onBeforeCompile = (shader) => {
-  shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
-  shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
-  shader.uniforms.uBoundsMinAndFade = sharedCloudUniforms.uBoundsMinAndFade;
-  shader.uniforms.uBoundsMaxAndCoverage = sharedCloudUniforms.uBoundsMaxAndCoverage;
-  shader.uniforms.uSunDirAndElevation = sharedCloudUniforms.uSunDirAndElevation;
-  shader.uniforms.uWorldOriginOffset = sharedCloudUniforms.uWorldOriginOffset;
-  shader.uniforms.uRainIntensity = uRainSplashUniform;
-  shader.uniforms.uHydroA = uHydroParamsA;
-  shader.uniforms.uHydroB = uHydroParamsB;
-  shader.uniforms.uTornadoStrength = uTornadoStrengthUniform;
+  Object.assign(shader.uniforms, {
+    uWeatherMap: sharedCloudUniforms.uWeatherMap,
+    uWindAndTime: sharedCloudUniforms.uWindAndTime,
+    uBoundsMinAndFade: sharedCloudUniforms.uBoundsMinAndFade,
+    uBoundsMaxAndCoverage: sharedCloudUniforms.uBoundsMaxAndCoverage,
+    uSunDirAndElevation: sharedCloudUniforms.uSunDirAndElevation,
+    uWorldOriginOffset: sharedCloudUniforms.uWorldOriginOffset,
+    uRainIntensity: uRainSplashUniform,
+    uHydroA: uHydroParamsA,
+    uHydroB: uHydroParamsB,
+    uTornadoStrength: uTornadoStrengthUniform,
+  });
 
   shader.vertexShader = shader.vertexShader
     .replace(
@@ -200,58 +174,44 @@ oceanMat.onBeforeCompile = (shader) => {
 
       float evalOceanHeight(vec2 xz, float t, out float outFoam) {
         outFoam = 0.0;
-        float h = uHydroA.w; // Tidal sea level
+        float h = uHydroA.w + sin(xz.x * 0.045 + t * 1.9) * 0.55 + cos(xz.y * 0.038 - t * 1.6) * 0.45;
 
-        // Gerstner-style wind swells
-        h += sin(xz.x * 0.045 + t * 1.9) * 0.55 + cos(xz.y * 0.038 - t * 1.6) * 0.45;
-
-        // Tsunami soliton wave wall
         float tsunamiStr = uHydroA.x;
         if (tsunamiStr > 0.01) {
           float dz = xz.y - uHydroA.y;
-          float soliton = exp(-(dz * dz) / (2.0 * 34.0 * 34.0));
-          float steepFront = 1.0 + 0.35 * tanh(-dz * 0.08);
-          float waveH = 26.0 * tsunamiStr * soliton * steepFront;
+          float waveH = 26.0 * tsunamiStr * exp(-(dz * dz) / 2312.0) * (1.0 + 0.35 * tanh(-dz * 0.08));
           h += waveH;
           outFoam += smoothstep(8.0, 22.0, waveH) * 0.95;
         }
 
-        // Whirlpool maelstrom funnel pit
         float whirlStr = uHydroA.z;
         if (whirlStr > 0.01) {
           vec2 dW = xz - uHydroB.xy;
           float r2 = dot(dW, dW);
           float r = sqrt(r2);
-          float pit = exp(-r2 / (2.0 * 44.0 * 44.0));
-          float spiralAngle = atan(dW.y, dW.x) + t * 4.8 - r * 0.14;
-          float spiralArm = sin(spiralAngle * 3.0) * 0.5 + 0.5;
-          h -= 15.5 * whirlStr * pit;
-          h += 1.8 * whirlStr * (spiralArm - 0.5) * exp(-r2 / (2.0 * 75.0 * 75.0));
-          outFoam += whirlStr * exp(-r2 / (2.0 * 65.0 * 65.0)) * (0.35 + 0.65 * spiralArm);
+          float spiralArm = sin((atan(dW.y, dW.x) + t * 4.8 - r * 0.14) * 3.0) * 0.5 + 0.5;
+          h -= 15.5 * whirlStr * exp(-r2 / 3872.0);
+          h += 1.8 * whirlStr * (spiralArm - 0.5) * exp(-r2 / 11250.0);
+          outFoam += whirlStr * exp(-r2 / 8450.0) * (0.35 + 0.65 * spiralArm);
         }
 
-        // Tornado waterspout spray collar on water
         if (uTornadoStrength > 0.01) {
-          vec2 dT = xz - uHydroB.zw;
-          float rT = length(dT);
-          float sprayRing = exp(-pow((rT - 24.0) / 14.0, 2.0));
-          h += 2.6 * uTornadoStrength * sprayRing;
+          float rT = length(xz - uHydroB.zw);
+          float dr = (rT - 24.0) / 14.0;
+          h += 2.6 * uTornadoStrength * exp(-(dr * dr));
           outFoam += uTornadoStrength * exp(-rT / 48.0) * 0.9;
         }
 
-        // Category 5 Hurricane storm surge dome & eyewall wave ring
         float hurricaneStr = uWorldOriginOffset.w;
         if (hurricaneStr > 0.01) {
           vec2 dH = xz - uHydroB.zw;
           float r2H = dot(dH, dH);
           float rH = sqrt(r2H);
-          float surgeDome = exp(-r2H / (2.0 * 115.0 * 115.0));
-          float eyewallRing = exp(-pow((rH - 88.0) / 38.0, 2.0));
-          float eyewallChop = sin(rH * 0.11 - t * 5.2) * eyewallRing;
-          h += (5.2 * surgeDome + 3.4 * eyewallChop) * hurricaneStr;
+          float drH = (rH - 88.0) / 38.0;
+          float eyewallRing = exp(-(drH * drH));
+          h += (5.2 * exp(-r2H / 26450.0) + 3.4 * sin(rH * 0.11 - t * 5.2) * eyewallRing) * hurricaneStr;
           outFoam += hurricaneStr * eyewallRing * 0.85;
         }
-
         return h;
       }`
     )
@@ -259,8 +219,7 @@ oceanMat.onBeforeCompile = (shader) => {
       '#include <beginnormal_vertex>',
       `#include <beginnormal_vertex>
       float tWave = uWindAndTime.z;
-      float foamCenter = 0.0;
-      float dummyF = 0.0;
+      float foamCenter = 0.0, dummyF = 0.0;
       float hC = evalOceanHeight(position.xz, tWave, foamCenter);
       float hX = evalOceanHeight(position.xz + vec2(2.5, 0.0), tWave, dummyF);
       float hZ = evalOceanHeight(position.xz + vec2(0.0, 2.5), tWave, dummyF);
@@ -293,8 +252,7 @@ oceanMat.onBeforeCompile = (shader) => {
         vec2 f = fract(p) - 0.5;
         float h = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
         float phase = fract(t * 1.85 + h);
-        float rad = phase * 0.46;
-        float ring = 1.0 - smoothstep(0.0, 0.055, abs(length(f) - rad));
+        float ring = 1.0 - smoothstep(0.0, 0.055, abs(length(f) - phase * 0.46));
         return ring * (1.0 - phase) * step(0.42, h);
       }`
     )
@@ -304,34 +262,19 @@ oceanMat.onBeforeCompile = (shader) => {
       vec3 sunDir = normalize(uSunDirAndElevation.xyz);
       float tCloudPlane = max((uBoundsMinAndFade.y - vOceanWorldPos.y) / max(sunDir.y, 0.08), 0.0);
       vec2 shadowWorldXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
-
-      vec2 boxMinXZ = uBoundsMinAndFade.xz;
-      vec2 boxSizeXZ = uBoundsMaxAndCoverage.xz - boxMinXZ;
-      vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
-      vec2 weatherUV = (shadowWorldXZ - boxMinXZ) / boxSizeXZ + windOffset * 0.00085;
-
-      float weatherCov = texture2D(uWeatherMap, weatherUV).r;
-      float cloudDensityShadow = smoothstep(
-        1.0 - uBoundsMaxAndCoverage.w * 1.35,
-        1.0,
-        weatherCov
-      );
+      vec2 weatherUV = (shadowWorldXZ - uBoundsMinAndFade.xz) / (uBoundsMaxAndCoverage.xz - uBoundsMinAndFade.xz) + uWindAndTime.xy * uWindAndTime.z * 0.00085;
+      float cloudDensityShadow = smoothstep(1.0 - uBoundsMaxAndCoverage.w * 1.35, 1.0, texture2D(uWeatherMap, weatherUV).r);
 
       vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
-      float wave = sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) *
-                   cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
-      gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * wave;
+      gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) * cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
 
-      // Blend whitewater foam on tsunami crest, whirlpool spiral arms, and tornado touchdown ring
       if (vFoamIntensity > 0.01) {
         float foamTex = 0.65 + 0.35 * sin(globalWaveXZ.x * 0.45 + uWindAndTime.z * 3.0) * cos(globalWaveXZ.y * 0.45);
         gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.88, 0.96, 1.0), clamp(vFoamIntensity * foamTex, 0.0, 0.92));
       }
 
       if (uRainIntensity > 0.01) {
-        float r1 = rainRingPattern(globalWaveXZ * 0.38, uWindAndTime.z);
-        float r2 = rainRingPattern(globalWaveXZ * 0.52 + vec2(17.3, 9.1), uWindAndTime.z * 1.15);
-        float splash = (r1 + r2) * uRainIntensity;
+        float splash = (rainRingPattern(globalWaveXZ * 0.38, uWindAndTime.z) + rainRingPattern(globalWaveXZ * 0.52 + vec2(17.3, 9.1), uWindAndTime.z * 1.15)) * uRainIntensity;
         gl_FragColor.rgb += vec3(0.18, 0.25, 0.32) * splash;
       }
 
@@ -340,8 +283,7 @@ oceanMat.onBeforeCompile = (shader) => {
     );
 };
 
-const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
-baseScene.add(oceanMesh);
+baseScene.add(new THREE.Mesh(oceanGeo, oceanMat));
 
 // 2. Continuous Morphable Landform System + GPU Topographic Height/Flow Map (uTerrainMap)
 const terrainState = {
@@ -364,12 +306,7 @@ function createMorphableTerrain() {
   const heights = new Float32Array(count);
 
   const terrainTexData = new Uint8Array(count * 4);
-  const terrainMapTex = new THREE.DataTexture(
-    terrainTexData,
-    gridRes,
-    gridRes,
-    THREE.RGBAFormat
-  );
+  const terrainMapTex = new THREE.DataTexture(terrainTexData, gridRes, gridRes, THREE.RGBAFormat);
   terrainMapTex.wrapS = THREE.ClampToEdgeWrapping;
   terrainMapTex.wrapT = THREE.ClampToEdgeWrapping;
   terrainMapTex.minFilter = THREE.LinearFilter;
@@ -393,18 +330,12 @@ function createMorphableTerrain() {
     const x = pos.getX(i);
     const z = pos.getZ(i);
 
-    const ridge =
-      0.76 +
-      0.16 * Math.sin(x * 0.028) * Math.cos(z * 0.028) +
-      0.10 * Math.sin(x * 0.065 + z * 0.055) +
-      0.05 * Math.cos(x * 0.13 - z * 0.11);
+    const ridge = 0.76 + 0.16 * Math.sin(x * 0.028) * Math.cos(z * 0.028) + 0.10 * Math.sin(x * 0.065 + z * 0.055) + 0.05 * Math.cos(x * 0.13 - z * 0.11);
     ridgeDetailBasis[i] = ridge;
 
     const distMain = Math.abs(x - getMainFjordX(z));
     const distCross = Math.abs(z - getCrossGorgeZ(x));
-    const minWaterDist = Math.min(distMain, distCross);
-
-    const coreWater = 1.0 - THREE.MathUtils.smoothstep(minWaterDist, 28.0, 56.0);
+    const coreWater = 1.0 - THREE.MathUtils.smoothstep(Math.min(distMain, distCross), 28.0, 56.0);
     riverChannelMask[i] = coreWater;
 
     const mainWall = Math.exp(-Math.pow(distMain / 105.0, 2.1));
@@ -413,9 +344,7 @@ function createMorphableTerrain() {
 
     let islH = 0.0;
     for (const isl of islands) {
-      const dx = x - isl.x;
-      const dz = z - isl.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const dist = Math.hypot(x - isl.x, z - isl.z);
       if (dist < isl.radius) {
         const falloff = Math.cos((dist / isl.radius) * (Math.PI * 0.5));
         islH = Math.max(islH, Math.pow(falloff, 1.55) * isl.weight * ridge);
@@ -423,17 +352,14 @@ function createMorphableTerrain() {
     }
     islandBasis[i] = islH * (1.0 - coreWater);
 
-    const radialDist = Math.sqrt(x * x + z * z);
-    const mapEnvelope = Math.max(0.0, 1.0 - Math.pow(radialDist / 540.0, 2.2));
-
-    const spine1Dist = Math.abs((x + 155.0) + Math.sin(z * 0.0065) * 75.0);
-    const spine2Dist = Math.abs((x - 160.0) - Math.sin(z * 0.0060 + 0.8) * 75.0);
-    const spine1 = Math.exp(-(spine1Dist * spine1Dist) / (2.0 * 155.0 * 155.0));
-    const spine2 = Math.exp(-(spine2Dist * spine2Dist) / (2.0 * 155.0 * 155.0));
-
-    const centralMass = Math.exp(-((x * x + z * z) / (2.0 * 320.0 * 320.0))) * 0.85;
-    const rawMassif = Math.min(1.18, Math.max(spine1, spine2) * 0.96 + centralMass * 0.52);
-    massifBasis[i] = rawMassif * mapEnvelope * ridge;
+    const r2 = x * x + z * z;
+    const mapEnvelope = Math.max(0.0, 1.0 - Math.pow(Math.sqrt(r2) / 540.0, 2.2));
+    const spine1Dist = Math.abs(x + 155.0 + Math.sin(z * 0.0065) * 75.0);
+    const spine2Dist = Math.abs(x - 160.0 - Math.sin(z * 0.0060 + 0.8) * 75.0);
+    const spine1 = Math.exp(-(spine1Dist * spine1Dist) / 48050.0);
+    const spine2 = Math.exp(-(spine2Dist * spine2Dist) / 48050.0);
+    const centralMass = Math.exp(-r2 / 204800.0) * 0.85;
+    massifBasis[i] = Math.min(1.18, Math.max(spine1, spine2) * 0.96 + centralMass * 0.52) * mapEnvelope * ridge;
   }
 
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -445,24 +371,18 @@ function createMorphableTerrain() {
   });
 
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uWeatherMap = sharedCloudUniforms.uWeatherMap;
-    shader.uniforms.uWindAndTime = sharedCloudUniforms.uWindAndTime;
-    shader.uniforms.uBoundsMinAndFade = sharedCloudUniforms.uBoundsMinAndFade;
-    shader.uniforms.uBoundsMaxAndCoverage = sharedCloudUniforms.uBoundsMaxAndCoverage;
-    shader.uniforms.uSunDirAndElevation = sharedCloudUniforms.uSunDirAndElevation;
-    shader.uniforms.uWorldOriginOffset = sharedCloudUniforms.uWorldOriginOffset;
+    Object.assign(shader.uniforms, {
+      uWeatherMap: sharedCloudUniforms.uWeatherMap,
+      uWindAndTime: sharedCloudUniforms.uWindAndTime,
+      uBoundsMinAndFade: sharedCloudUniforms.uBoundsMinAndFade,
+      uBoundsMaxAndCoverage: sharedCloudUniforms.uBoundsMaxAndCoverage,
+      uSunDirAndElevation: sharedCloudUniforms.uSunDirAndElevation,
+      uWorldOriginOffset: sharedCloudUniforms.uWorldOriginOffset,
+    });
 
     shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <common>',
-        `#include <common>
-        varying vec3 vTerrainWorldPos;`
-      )
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-        vTerrainWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
-      );
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTerrainWorldPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrainWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
 
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -482,19 +402,8 @@ function createMorphableTerrain() {
         vec3 sunDir = normalize(uSunDirAndElevation.xyz);
         float tCloudPlane = max((uBoundsMinAndFade.y - vTerrainWorldPos.y) / max(sunDir.y, 0.08), 0.0);
         vec2 shadowWorldXZ = vTerrainWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
-
-        vec2 boxMinXZ = uBoundsMinAndFade.xz;
-        vec2 boxSizeXZ = uBoundsMaxAndCoverage.xz - boxMinXZ;
-        vec2 windOffset = uWindAndTime.xy * uWindAndTime.z;
-        vec2 weatherUV = (shadowWorldXZ - boxMinXZ) / boxSizeXZ + windOffset * 0.00085;
-
-        float weatherCov = texture2D(uWeatherMap, weatherUV).r;
-        float cloudShadow = smoothstep(
-          1.0 - uBoundsMaxAndCoverage.w * 1.35,
-          1.0,
-          weatherCov
-        );
-
+        vec2 weatherUV = (shadowWorldXZ - uBoundsMinAndFade.xz) / (uBoundsMaxAndCoverage.xz - uBoundsMinAndFade.xz) + uWindAndTime.xy * uWindAndTime.z * 0.00085;
+        float cloudShadow = smoothstep(1.0 - uBoundsMaxAndCoverage.w * 1.35, 1.0, texture2D(uWeatherMap, weatherUV).r);
         float aboveCloudFade = 1.0 - smoothstep(uBoundsMinAndFade.y, uBoundsMaxAndCoverage.y, vTerrainWorldPos.y);
         gl_FragColor.rgb *= mix(1.0, 0.45, cloudShadow * aboveCloudFade * 0.78);
         #include <dithering_fragment>`
@@ -518,27 +427,20 @@ function createMorphableTerrain() {
     const waterLvl = hydroState.waterLevel;
     const colorAttr = geo.attributes.color;
     const colorArr = colorAttr.array;
+    const morphStep = THREE.MathUtils.smoothstep(morph, 0.05, 0.50);
 
     for (let i = 0; i < count; i++) {
       const isl = islandBasis[i];
-      const massif = massifBasis[i];
       const riverCut = riverChannelMask[i];
-      const slopeCut = canyonSlopeBasis[i];
-      const ridge = ridgeDetailBasis[i];
-
-      const combinedLand = THREE.MathUtils.lerp(isl, Math.max(isl * 0.85, massif), morph);
-      const wallCarve = slopeCut * canyonStrength * THREE.MathUtils.smoothstep(morph, 0.05, 0.50);
+      const wallCarve = canyonSlopeBasis[i] * canyonStrength * morphStep;
       const totalCarve = Math.min(1.0, Math.max(riverCut, wallCarve * 0.92));
 
-      const rawNormalizedH = combinedLand * (1.0 - totalCarve);
+      const rawNormalizedH = THREE.MathUtils.lerp(isl, Math.max(isl * 0.85, massifBasis[i]), morph) * (1.0 - totalCarve);
       const terraceStep = Math.sin(rawNormalizedH * 22.0) * 0.018 * wallCarve * (1.0 - riverCut);
-
-      // Deepen river channel floor to -14m so even at Low Tide (-5m) the gorges remain navigable waterways
       const h = (rawNormalizedH + terraceStep) * peakScale - 9.5 - riverCut * 5.5;
       pos.setY(i, h);
       heights[i] = h;
 
-      // Dynamic shoreline coloring relative to current Tidal Sea Level
       const relH = h - waterLvl;
       if (relH < 1.5) {
         colTemp.copy(colWetShoal);
@@ -546,22 +448,21 @@ function createMorphableTerrain() {
         colTemp.copy(colSand);
       } else if (h < 88.0) {
         const t = Math.max(0.0, (h - (waterLvl + 5.5)) / 82.5);
-        const wallTint = Math.min(1.0, wallCarve * 1.6);
-        colTemp.copy(colForest).lerp(colCanyonTerrace, wallTint * 0.65).lerp(colRock, t * 0.75);
+        colTemp.copy(colForest).lerp(colCanyonTerrace, Math.min(1.0, wallCarve * 1.6) * 0.65).lerp(colRock, t * 0.75);
       } else if (h < 185.0) {
-        const t = (h - 88.0) / 97.0;
-        colTemp.copy(colRock).lerp(colCanyonTerrace, wallCarve * 0.35 * (1.0 - t));
+        colTemp.copy(colRock).lerp(colCanyonTerrace, wallCarve * 0.35 * (1.0 - (h - 88.0) / 97.0));
       } else {
-        const snowFactor = Math.min(1.0, (h - 185.0) / 55.0 + (ridge - 0.75) * 0.6);
+        const snowFactor = Math.min(1.0, (h - 185.0) / 55.0 + (ridgeDetailBasis[i] - 0.75) * 0.6);
         colTemp.copy(colRock).lerp(colSnow, Math.max(0.0, snowFactor));
       }
 
-      colorArr[i * 3] = colTemp.r;
-      colorArr[i * 3 + 1] = colTemp.g;
-      colorArr[i * 3 + 2] = colTemp.b;
+      const i3 = i * 3;
+      colorArr[i3] = colTemp.r;
+      colorArr[i3 + 1] = colTemp.g;
+      colorArr[i3 + 2] = colTemp.b;
     }
 
-    const cellStepM = 1200.0 / segs;
+    const invTwoStepM = 1.0 / (2.0 * (1200.0 / segs));
     for (let iz = 0; iz < gridRes; iz++) {
       const zPrev = Math.max(0, iz - 1);
       const zNext = Math.min(segs, iz + 1);
@@ -571,25 +472,18 @@ function createMorphableTerrain() {
         const idx = iz * gridRes + ix;
 
         const hCenter = Math.max(0.0, heights[idx]);
-        const dhdx = (Math.max(0.0, heights[iz * gridRes + xNext]) - Math.max(0.0, heights[iz * gridRes + xPrev])) / (2.0 * cellStepM);
-        const dhdz = (Math.max(0.0, heights[zNext * gridRes + ix]) - Math.max(0.0, heights[zPrev * gridRes + ix])) / (2.0 * cellStepM);
-
-        const rByte = Math.min(255, Math.max(0, Math.round((hCenter / 380.0) * 255.0)));
-        const gByte = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdx / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
-        const bByte = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdz / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
-        const funnel = Math.max(riverChannelMask[idx], canyonSlopeBasis[idx] * 0.65);
-        const aByte = Math.min(255, Math.max(0, Math.round(funnel * 255.0)));
+        const dhdx = (Math.max(0.0, heights[iz * gridRes + xNext]) - Math.max(0.0, heights[iz * gridRes + xPrev])) * invTwoStepM;
+        const dhdz = (Math.max(0.0, heights[zNext * gridRes + ix]) - Math.max(0.0, heights[zPrev * gridRes + ix])) * invTwoStepM;
 
         const idx4 = idx * 4;
-        terrainTexData[idx4] = rByte;
-        terrainTexData[idx4 + 1] = gByte;
-        terrainTexData[idx4 + 2] = bByte;
-        terrainTexData[idx4 + 3] = aByte;
+        terrainTexData[idx4] = Math.min(255, Math.max(0, Math.round((hCenter / 380.0) * 255.0)));
+        terrainTexData[idx4 + 1] = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdx / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
+        terrainTexData[idx4 + 2] = Math.min(255, Math.max(0, Math.round((THREE.MathUtils.clamp(dhdz / 1.25, -1.0, 1.0) * 0.5 + 0.5) * 255.0)));
+        terrainTexData[idx4 + 3] = Math.min(255, Math.max(0, Math.round(Math.max(riverChannelMask[idx], canyonSlopeBasis[idx] * 0.65) * 255.0)));
       }
     }
     terrainMapTex.needsUpdate = true;
 
-    // Run Disjoint-Set Union-Find topological connectivity scan for Emerged Islands & Flooded Waterways
     const topo = analyzeTerrainTopologyUnionFind(heights, gridRes, waterLvl);
     terrainState.islandCount = topo.islandCount;
     terrainState.waterBasinCount = topo.waterBasinCount;
@@ -599,7 +493,6 @@ function createMorphableTerrain() {
     geo.computeVertexNormals();
   }
 
-  // Zero-allocation 2-slot ring buffer for high-frequency CPU terrain queries
   const _sampleRing = [
     { h: 0.0, gx: 0.0, gz: 0.0, funnel: 0.0 },
     { h: 0.0, gx: 0.0, gz: 0.0, funnel: 0.0 },
@@ -609,9 +502,7 @@ function createMorphableTerrain() {
   function sampleHeightAndGradient(x, z) {
     const u = THREE.MathUtils.clamp((x + 600.0) / 1200.0, 0.0, 0.999);
     const v = THREE.MathUtils.clamp((z + 600.0) / 1200.0, 0.0, 0.999);
-    const ix = Math.floor(u * segs);
-    const iz = Math.floor(v * segs);
-    const idx = iz * gridRes + ix;
+    const idx = Math.floor(v * segs) * gridRes + Math.floor(u * segs);
     const idx4 = idx * 4;
     const out = _sampleRing[(_ringIdx = (_ringIdx + 1) & 1)];
     out.h = Math.max(0.0, heights[idx]);
@@ -633,11 +524,11 @@ atmosphere.setTerrainMap(terrain.terrainMapTex);
 const fluidClusterParticles = new LagrangianVortexParticleSystem(512);
 baseScene.add(fluidClusterParticles.points);
 
-// 4. 100% GPU Hardware-Accelerated Topographic Wind Streamlines (Static VBO + Vertex Shader uTerrainMap Sampling)
+// 4. 100% GPU Hardware-Accelerated Topographic Wind Streamlines
 function createAirflowStreamlines(streamCount = 240, segsPerStream = 8) {
   const totalVerts = streamCount * segsPerStream * 2;
   const positions = new Float32Array(totalVerts * 3);
-  const seeds = new Float32Array(totalVerts * 4); // x: seedX, y: baseY, z: seedZ, w: speedScale
+  const seeds = new Float32Array(totalVerts * 4);
   const segFracs = new Float32Array(totalVerts);
 
   for (let i = 0; i < streamCount; i++) {
@@ -648,22 +539,16 @@ function createAirflowStreamlines(streamCount = 240, segsPerStream = 8) {
     const baseVert = i * segsPerStream * 2;
 
     for (let s = 0; s < segsPerStream; s++) {
-      const f0 = s / segsPerStream;
-      const f1 = (s + 1) / segsPerStream;
       const v0 = baseVert + s * 2;
-      const v1 = v0 + 1;
-
-      seeds[v0 * 4] = sx;
-      seeds[v0 * 4 + 1] = sy;
-      seeds[v0 * 4 + 2] = sz;
-      seeds[v0 * 4 + 3] = spd;
-      segFracs[v0] = f0;
-
-      seeds[v1 * 4] = sx;
-      seeds[v1 * 4 + 1] = sy;
-      seeds[v1 * 4 + 2] = sz;
-      seeds[v1 * 4 + 3] = spd;
-      segFracs[v1] = f1;
+      for (let k = 0; k < 2; k++) {
+        const v = v0 + k;
+        const v4 = v * 4;
+        seeds[v4] = sx;
+        seeds[v4 + 1] = sy;
+        seeds[v4 + 2] = sz;
+        seeds[v4 + 3] = spd;
+        segFracs[v] = (s + k) / segsPerStream;
+      }
     }
   }
 
@@ -689,48 +574,34 @@ function createAirflowStreamlines(streamCount = 240, segsPerStream = 8) {
       uniform vec4 uVortexAndTide;
       varying float vAlpha;
 
-      vec2 evalStreamVelocity(vec2 xz, float baseY, vec2 baseWind, out float outTerrH) {
-        vec2 uv = clamp((xz + 600.0) / 1200.0, 0.002, 0.998);
-        vec4 tSample = texture2D(uTerrainMap, uv);
-        outTerrH = tSample.r * 380.0;
+      vec2 evalStreamVelocity(vec2 xz, float baseY, vec2 baseWind) {
+        vec4 tSample = texture2D(uTerrainMap, clamp((xz + 600.0) / 1200.0, 0.002, 0.998));
+        float terrH = tSample.r * 380.0;
         vec2 gradXZ = (tSample.gb - 0.5) * 2.5;
-        float funnel = tSample.a;
-
-        vec2 vel = baseWind * (1.0 + funnel * 0.45);
-        if (outTerrH > baseY - 45.0) {
-          float blk = clamp((outTerrH - (baseY - 45.0)) / 75.0, 0.0, 1.8);
-          vel -= gradXZ * (52.0 * blk);
+        vec2 vel = baseWind * (1.0 + tSample.a * 0.45);
+        if (terrH > baseY - 45.0) {
+          vel -= gradXZ * (52.0 * clamp((terrH - (baseY - 45.0)) / 75.0, 0.0, 1.8));
         }
-
         if (uVortexAndTide.z > 0.01) {
           vec2 dV = xz - uVortexAndTide.xy;
           float r = length(dV) + 0.1;
           if (r < 220.0) {
-            float factor = (1.0 - r / 220.0) * uVortexAndTide.z;
-            vec2 tang = vec2(-dV.y, dV.x) / r;
-            vec2 rad = -dV / r;
-            vel += tang * (125.0 * factor) + rad * (42.0 * factor);
+            float factor = (1.0 - r / 220.0) * uVortexAndTide.z / r;
+            vel += vec2(-dV.y, dV.x) * (125.0 * factor) - dV * (42.0 * factor);
           }
         }
         return vel;
       }
 
       void main() {
-        float t = uWindAndTime.z;
         vec2 baseWind = uWindAndTime.xy * (3.2 * aSeed.w);
-        vec2 headXZ = mod(aSeed.xz + baseWind * t + 520.0, 1040.0) - 520.0;
-
-        float terrH0 = 0.0;
-        vec2 v0 = evalStreamVelocity(headXZ, aSeed.y, baseWind, terrH0);
-        vec2 midXZ = headXZ - v0 * (aSegFrac * 0.42);
-        float terrH1 = 0.0;
-        vec2 v1 = evalStreamVelocity(midXZ, aSeed.y, baseWind, terrH1);
+        vec2 headXZ = mod(aSeed.xz + baseWind * uWindAndTime.z + 520.0, 1040.0) - 520.0;
+        vec2 v0 = evalStreamVelocity(headXZ, aSeed.y, baseWind);
+        vec2 v1 = evalStreamVelocity(headXZ - v0 * (aSegFrac * 0.42), aSeed.y, baseWind);
         vec2 posXZ = headXZ - 0.5 * (v0 + v1) * (aSegFrac * 0.85);
 
-        vec2 uvFinal = clamp((posXZ + 600.0) / 1200.0, 0.002, 0.998);
-        float finalH = texture2D(uTerrainMap, uvFinal).r * 380.0;
+        float finalH = texture2D(uTerrainMap, clamp((posXZ + 600.0) / 1200.0, 0.002, 0.998)).r * 380.0;
         float y = max(aSeed.y + finalH * 0.35, max(finalH, uVortexAndTide.w) + 16.0);
-
         vAlpha = 1.0 - aSegFrac;
         gl_Position = projectionMatrix * viewMatrix * vec4(posXZ.x, y, posXZ.y, 1.0);
       }
@@ -746,14 +617,26 @@ function createAirflowStreamlines(streamCount = 240, segsPerStream = 8) {
 
   const lines = new THREE.LineSegments(geo, mat);
   lines.frustumCulled = false;
-
   return { lines };
 }
 
-const airflowStreams = createAirflowStreamlines(240, 8);
-baseScene.add(airflowStreams.lines);
+baseScene.add(createAirflowStreamlines(240, 8).lines);
 
 // 5. Saronic Autonomous Surface Vessels (ASVs: Corsair, Cutlass, Spyglass) with 6-DOF Wave-Riding Physics
+function drawSaronicEmblem(ctx, accentCss) {
+  const poly = (pts, color) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fill();
+  };
+  poly([[42, 4], [80, 26], [66, 76], [42, 60], [18, 76], [4, 26]], '#ffffff');
+  poly([[42, 18], [62, 32], [54, 58], [42, 48], [30, 58], [22, 32]], '#111822');
+  poly([[42, 24], [51, 46], [42, 40], [33, 46]], accentCss);
+}
+
 function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   const c = document.createElement('canvas');
   c.width = 512;
@@ -761,44 +644,14 @@ function createSaronicLogoTexture(vesselClass, hullNumber, accentCss) {
   const ctx = c.getContext('2d');
 
   ctx.fillStyle = '#111822';
-  ctx.fillRect(0, 0, c.width, c.height);
-
+  ctx.fillRect(0, 0, 512, 128);
   ctx.fillStyle = accentCss;
-  ctx.fillRect(0, 0, c.width, 4);
-  ctx.fillRect(0, c.height - 4, c.width, 4);
+  ctx.fillRect(0, 0, 512, 4);
+  ctx.fillRect(0, 124, 512, 4);
 
   ctx.save();
   ctx.translate(28, 22);
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.moveTo(42, 4);
-  ctx.lineTo(80, 26);
-  ctx.lineTo(66, 76);
-  ctx.lineTo(42, 60);
-  ctx.lineTo(18, 76);
-  ctx.lineTo(4, 26);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = '#111822';
-  ctx.beginPath();
-  ctx.moveTo(42, 18);
-  ctx.lineTo(62, 32);
-  ctx.lineTo(54, 58);
-  ctx.lineTo(42, 48);
-  ctx.lineTo(30, 58);
-  ctx.lineTo(22, 32);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = accentCss;
-  ctx.beginPath();
-  ctx.moveTo(42, 24);
-  ctx.lineTo(51, 46);
-  ctx.lineTo(42, 40);
-  ctx.lineTo(33, 46);
-  ctx.closePath();
-  ctx.fill();
+  drawSaronicEmblem(ctx, accentCss);
   ctx.restore();
 
   ctx.fillStyle = '#f8fafc';
@@ -824,41 +677,14 @@ function createSaronicDeckEmblemTexture(accentCss) {
 
   ctx.fillStyle = '#151e2b';
   ctx.fillRect(0, 0, 256, 256);
-
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
   ctx.lineWidth = 4;
   ctx.strokeRect(14, 14, 228, 228);
 
-  ctx.fillStyle = '#f8fafc';
-  ctx.beginPath();
-  ctx.moveTo(128, 36);
-  ctx.lineTo(204, 82);
-  ctx.lineTo(176, 178);
-  ctx.lineTo(128, 148);
-  ctx.lineTo(80, 178);
-  ctx.lineTo(52, 82);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = '#151e2b';
-  ctx.beginPath();
-  ctx.moveTo(128, 66);
-  ctx.lineTo(168, 92);
-  ctx.lineTo(152, 142);
-  ctx.lineTo(128, 125);
-  ctx.lineTo(104, 142);
-  ctx.lineTo(88, 92);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = accentCss;
-  ctx.beginPath();
-  ctx.moveTo(128, 78);
-  ctx.lineTo(146, 122);
-  ctx.lineTo(128, 110);
-  ctx.lineTo(110, 122);
-  ctx.closePath();
-  ctx.fill();
+  ctx.save();
+  ctx.translate(44, 28);
+  drawSaronicEmblem(ctx, accentCss);
+  ctx.restore();
 
   ctx.fillStyle = '#ffffff';
   ctx.font = '800 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
@@ -875,54 +701,19 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   const group = new THREE.Group();
 
   const hullPositions = new Float32Array([
-    0.0, 2.3, 14.5,
-    0.0, 0.1, 13.2,
-
-    -2.6, 2.2, 5.5,
-     2.6, 2.2, 5.5,
-    -3.1, 1.1, 5.2,
-     3.1, 1.1, 5.2,
-    -2.2, 0.0, 5.0,
-     2.2, 0.0, 5.0,
-
-    -2.8, 2.1, -6.5,
-     2.8, 2.1, -6.5,
-    -3.4, 1.1, -6.8,
-     3.4, 1.1, -6.8,
-    -2.5, 0.0, -6.8,
-     2.5, 0.0, -6.8,
-
-    -2.3, 1.9, -11.5,
-     2.3, 1.9, -11.5,
-    -2.7, 0.9, -12.0,
-     2.7, 0.9, -12.0,
-    -2.0, 0.0, -11.8,
-     2.0, 0.0, -11.8,
+    0.0, 2.3, 14.5,  0.0, 0.1, 13.2,
+    -2.6, 2.2, 5.5,  2.6, 2.2, 5.5,  -3.1, 1.1, 5.2,  3.1, 1.1, 5.2,  -2.2, 0.0, 5.0,  2.2, 0.0, 5.0,
+    -2.8, 2.1, -6.5, 2.8, 2.1, -6.5, -3.4, 1.1, -6.8, 3.4, 1.1, -6.8, -2.5, 0.0, -6.8, 2.5, 0.0, -6.8,
+    -2.3, 1.9, -11.5, 2.3, 1.9, -11.5, -2.7, 0.9, -12.0, 2.7, 0.9, -12.0, -2.0, 0.0, -11.8, 2.0, 0.0, -11.8,
   ]);
 
   const hullIndices = [
-    0, 2, 3,
-    2, 8, 9,  2, 9, 3,
-    8, 14, 15, 8, 15, 9,
-
-    0, 4, 2,
-    2, 4, 10, 2, 10, 8,
-    8, 10, 16, 8, 16, 14,
-
-    0, 3, 5,
-    3, 11, 5, 3, 9, 11,
-    9, 15, 17, 9, 17, 11,
-
-    1, 6, 4,  0, 1, 4,
-    4, 6, 12, 4, 12, 10,
-    10, 12, 18, 10, 18, 16,
-
-    1, 5, 7,  0, 5, 1,
-    5, 11, 13, 5, 13, 7,
-    11, 17, 19, 11, 19, 13,
-
-    14, 16, 17, 14, 17, 15,
-    16, 18, 19, 16, 19, 17,
+    0,2,3, 2,8,9, 2,9,3, 8,14,15, 8,15,9,
+    0,4,2, 2,4,10, 2,10,8, 8,10,16, 8,16,14,
+    0,3,5, 3,11,5, 3,9,11, 9,15,17, 9,17,11,
+    1,6,4, 0,1,4, 4,6,12, 4,12,10, 10,12,18, 10,18,16,
+    1,5,7, 0,5,1, 5,11,13, 5,13,7, 11,17,19, 11,19,13,
+    14,16,17, 14,17,15, 16,18,19, 16,19,17,
   ];
 
   const hullGeo = new THREE.BufferGeometry();
@@ -930,118 +721,66 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   hullGeo.setIndex(hullIndices);
   hullGeo.computeVertexNormals();
 
-  const hullMat = new THREE.MeshStandardMaterial({
-    color: 0x161f2c,
-    roughness: 0.32,
-    metalness: 0.72,
-    flatShading: true,
-  });
-  const hullMesh = new THREE.Mesh(hullGeo, hullMat);
-  group.add(hullMesh);
+  const hullMat = new THREE.MeshStandardMaterial({ color: 0x161f2c, roughness: 0.32, metalness: 0.72, flatShading: true });
+  group.add(new THREE.Mesh(hullGeo, hullMat));
 
   const deckHouseGeo = new THREE.ConeGeometry(2.3, 1.6, 4);
   deckHouseGeo.rotateY(Math.PI * 0.25);
   deckHouseGeo.scale(1.0, 1.0, 2.4);
-  const deckHouseMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    roughness: 0.28,
-    metalness: 0.78,
-    flatShading: true,
-  });
-  const deckHouse = new THREE.Mesh(deckHouseGeo, deckHouseMat);
+  const deckHouse = new THREE.Mesh(deckHouseGeo, new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.28, metalness: 0.78, flatShading: true }));
   deckHouse.position.set(0, 2.7, 0.2);
   group.add(deckHouse);
 
-  const satcom = new THREE.Mesh(
-    new THREE.BoxGeometry(1.6, 0.16, 2.2),
-    new THREE.MeshStandardMaterial({ color: 0xdbeafe, roughness: 0.2, metalness: 0.5 })
-  );
+  const satcom = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.16, 2.2), new THREE.MeshStandardMaterial({ color: 0xdbeafe, roughness: 0.2, metalness: 0.5 }));
   satcom.position.set(0, 3.52, 0.5);
   satcom.rotation.x = -0.08;
   group.add(satcom);
 
-  const mastGeo = new THREE.BoxGeometry(0.75, 3.8, 1.4);
-  const mast = new THREE.Mesh(mastGeo, hullMat);
+  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.75, 3.8, 1.4), hullMat);
   mast.position.set(0, 4.8, -1.2);
   mast.rotation.x = -0.18;
   group.add(mast);
 
-  const eoirTurret = new THREE.Mesh(
-    new THREE.SphereGeometry(0.62, 14, 14),
-    new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.18, metalness: 0.85 })
-  );
+  const eoirTurret = new THREE.Mesh(new THREE.SphereGeometry(0.62, 14, 14), new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.18, metalness: 0.85 }));
   eoirTurret.position.set(0, 6.85, -1.55);
   group.add(eoirTurret);
 
-  const beacon = new THREE.Mesh(
-    new THREE.SphereGeometry(0.38, 10, 10),
-    new THREE.MeshBasicMaterial({ color: accentHex })
-  );
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.38, 10, 10), new THREE.MeshBasicMaterial({ color: accentHex }));
   beacon.position.set(0, 7.65, -1.55);
   group.add(beacon);
 
   const sideLogoTex = createSaronicLogoTexture(vesselClass, hullNumber, accentCss);
-  const sideLogoMat = new THREE.MeshBasicMaterial({
-    map: sideLogoTex,
-    side: THREE.DoubleSide,
-  });
+  const sideLogoMat = new THREE.MeshBasicMaterial({ map: sideLogoTex, side: THREE.DoubleSide });
   const sidePlaneGeo = new THREE.PlaneGeometry(9.6, 2.2);
 
   const stbdLogo = new THREE.Mesh(sidePlaneGeo, sideLogoMat);
   stbdLogo.position.set(3.05, 1.55, -0.6);
-  stbdLogo.rotation.y = Math.PI * 0.5;
-  stbdLogo.rotation.z = 0.01;
-  stbdLogo.rotation.x = -0.22;
+  stbdLogo.rotation.set(-0.22, Math.PI * 0.5, 0.01);
   group.add(stbdLogo);
 
   const portLogo = new THREE.Mesh(sidePlaneGeo, sideLogoMat);
   portLogo.position.set(-3.05, 1.55, -0.6);
-  portLogo.rotation.y = -Math.PI * 0.5;
-  portLogo.rotation.x = 0.22;
+  portLogo.rotation.set(0.22, -Math.PI * 0.5, 0);
   group.add(portLogo);
 
-  const deckLogoTex = createSaronicDeckEmblemTexture(accentCss);
-  const deckLogo = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.4, 3.4),
-    new THREE.MeshBasicMaterial({ map: deckLogoTex })
-  );
+  const deckLogo = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4), new THREE.MeshBasicMaterial({ map: createSaronicDeckEmblemTexture(accentCss) }));
   deckLogo.rotation.x = -Math.PI * 0.5;
   deckLogo.position.set(0, 2.26, 6.2);
   group.add(deckLogo);
 
-  const bannerMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(11.5, 2.8),
-    new THREE.MeshBasicMaterial({
-      map: sideLogoTex,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.94,
-    })
-  );
+  const bannerMesh = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 2.8), new THREE.MeshBasicMaterial({ map: sideLogoTex, side: THREE.DoubleSide, transparent: true, opacity: 0.94 }));
   bannerMesh.position.set(0, 10.2, -1.5);
   group.add(bannerMesh);
 
   const wakeGeo = new THREE.PlaneGeometry(16, 56);
   wakeGeo.rotateX(-Math.PI / 2);
-  const wakeMat = new THREE.MeshBasicMaterial({
-    color: 0xd8f3ff,
-    transparent: true,
-    opacity: 0.34,
-    depthWrite: false,
-  });
-  const wake = new THREE.Mesh(wakeGeo, wakeMat);
+  const wake = new THREE.Mesh(wakeGeo, new THREE.MeshBasicMaterial({ color: 0xd8f3ff, transparent: true, opacity: 0.34, depthWrite: false }));
   wake.position.set(0, 0.18, -36);
   group.add(wake);
 
   const sprayGeo = new THREE.PlaneGeometry(5.5, 22);
   sprayGeo.rotateX(-Math.PI / 2);
-  const sprayMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.52,
-    depthWrite: false,
-  });
-  const spray = new THREE.Mesh(sprayGeo, sprayMat);
+  const spray = new THREE.Mesh(sprayGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.52, depthWrite: false }));
   spray.position.set(0, 0.24, -21);
   group.add(spray);
 
@@ -1052,65 +791,29 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
 function sampleFleetWaterwayPath(routeType, t) {
   if (routeType === 'mainFjordNorthSouth') {
     const z = Math.sin(t) * 440.0;
-    const x = getMainFjordX(z) + Math.cos(t * 2.0) * 8.0;
-    return { x, z };
-  } else if (routeType === 'crossGorgeEastWest') {
-    const x = Math.sin(t) * 430.0;
-    const z = getCrossGorgeZ(x) + Math.sin(t * 2.0) * 7.0;
-    return { x, z };
-  } else {
-    const s = Math.sin(t);
-    if (s >= 0.0) {
-      const z = s * 420.0;
-      return { x: getMainFjordX(z) - 9.0, z };
-    } else {
-      const x = -s * 420.0;
-      return { x, z: getCrossGorgeZ(x) + 9.0 };
-    }
+    return { x: getMainFjordX(z) + Math.cos(t * 2.0) * 8.0, z };
   }
+  if (routeType === 'crossGorgeEastWest') {
+    const x = Math.sin(t) * 430.0;
+    return { x, z: getCrossGorgeZ(x) + Math.sin(t * 2.0) * 7.0 };
+  }
+  const s = Math.sin(t);
+  if (s >= 0.0) {
+    const z = s * 420.0;
+    return { x: getMainFjordX(z) - 9.0, z };
+  }
+  const x = -s * 420.0;
+  return { x, z: getCrossGorgeZ(x) + 9.0 };
 }
 
 const fleet = [
-  {
-    ...createSaronicASVMesh({
-      vesselClass: 'CORSAIR',
-      hullNumber: 'ASV-01',
-      accentHex: 0x38bdf8,
-      accentCss: '#38bdf8',
-      scale: 1.15,
-    }),
-    routeType: 'mainFjordNorthSouth',
-    speed: 0.14,
-    phase: 0.2,
-  },
-  {
-    ...createSaronicASVMesh({
-      vesselClass: 'CUTLASS',
-      hullNumber: 'ASV-02',
-      accentHex: 0x34d399,
-      accentCss: '#34d399',
-      scale: 1.0,
-    }),
-    routeType: 'crossGorgeEastWest',
-    speed: 0.16,
-    phase: 1.7,
-  },
-  {
-    ...createSaronicASVMesh({
-      vesselClass: 'SPYGLASS',
-      hullNumber: 'ASV-03',
-      accentHex: 0xf59e0b,
-      accentCss: '#f59e0b',
-      scale: 0.92,
-    }),
-    routeType: 'canyonJunctionWeave',
-    speed: 0.13,
-    phase: 3.4,
-  },
+  { ...createSaronicASVMesh({ vesselClass: 'CORSAIR',  hullNumber: 'ASV-01', accentHex: 0x38bdf8, accentCss: '#38bdf8', scale: 1.15 }), routeType: 'mainFjordNorthSouth', speed: 0.14, phase: 0.2 },
+  { ...createSaronicASVMesh({ vesselClass: 'CUTLASS',  hullNumber: 'ASV-02', accentHex: 0x34d399, accentCss: '#34d399', scale: 1.00 }), routeType: 'crossGorgeEastWest',  speed: 0.16, phase: 1.7 },
+  { ...createSaronicASVMesh({ vesselClass: 'SPYGLASS', hullNumber: 'ASV-03', accentHex: 0xf59e0b, accentCss: '#f59e0b', scale: 0.92 }), routeType: 'canyonJunctionWeave', speed: 0.13, phase: 3.4 },
 ];
 fleet.forEach((v) => baseScene.add(v.group));
 
-// 6. GPU-Accelerated 3D Rain Streak System (wind-slanted falling rain streaks around camera)
+// 6. GPU-Accelerated 3D Rain Streak System
 function createPrecipitationSystem(dropCount = 9000) {
   const geo = new THREE.BufferGeometry();
   const positions = new Float32Array(dropCount * 6);
@@ -1120,16 +823,10 @@ function createPrecipitationSystem(dropCount = 9000) {
     const rx = (Math.random() - 0.5) * 900;
     const ry = Math.random() * 260;
     const rz = (Math.random() - 0.5) * 900;
-
     const i6 = i * 6;
-    positions[i6] = rx;
-    positions[i6 + 1] = ry;
-    positions[i6 + 2] = rz;
-
-    positions[i6 + 3] = rx;
-    positions[i6 + 4] = ry;
-    positions[i6 + 5] = rz;
-
+    positions[i6] = positions[i6 + 3] = rx;
+    positions[i6 + 1] = positions[i6 + 4] = ry;
+    positions[i6 + 2] = positions[i6 + 5] = rz;
     seeds[i * 2] = 0.0;
     seeds[i * 2 + 1] = 1.0;
   }
@@ -1160,22 +857,14 @@ function createPrecipitationSystem(dropCount = 9000) {
       void main() {
         float cellSpan = 750.0;
         float maxH = max(uCloudBaseY + 25.0, 90.0);
-
         vec3 basePos = position;
         float speed = 135.0 + fract(sin(basePos.x * 12.9898 + basePos.z * 78.233) * 43758.5453) * 45.0;
-
         float yFall = mod(basePos.y - uTime * speed, maxH);
         vec2 relXZ = mod(basePos.xz - uCameraPos.xz + cellSpan * 0.5, cellSpan) - cellSpan * 0.5;
         vec3 worldPos = vec3(uCameraPos.x + relXZ.x, yFall, uCameraPos.z + relXZ.z);
-
-        float streakLen = mix(4.5, 9.5, uRainIntensity);
-        vec3 streakVec = normalize(vec3(uWindXZ.x * 0.35, -speed, uWindXZ.y * 0.35)) * streakLen;
-        worldPos += streakVec * aTip;
-
-        float dist = length(worldPos.xz - uCameraPos.xz);
-        float distFade = 1.0 - smoothstep(140.0, 370.0, dist);
+        worldPos += normalize(vec3(uWindXZ.x * 0.35, -speed, uWindXZ.y * 0.35)) * mix(4.5, 9.5, uRainIntensity) * aTip;
+        float distFade = 1.0 - smoothstep(140.0, 370.0, length(worldPos.xz - uCameraPos.xz));
         vAlpha = uRainIntensity * distFade * (aTip > 0.5 ? 0.55 : 0.08);
-
         gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
       }
     `,
@@ -1199,46 +888,34 @@ baseScene.add(rainSystem.lines);
 
 // 7. GPU-Accelerated 3D Branched Cloud-to-Ground & Intra-Cloud Lightning Bolt System
 function createLightningBoltSystem(boltCount = 6, segsPerBolt = 18) {
-  // Each bolt has 1 main trunk (segsPerBolt segments) + 2 forked side branches (6 segments each)
   const segsTotalPerBolt = segsPerBolt + 12;
   const totalVerts = boltCount * segsTotalPerBolt * 2;
   const positions = new Float32Array(totalVerts * 3);
-  const boltMeta = new Float32Array(totalVerts * 4); // x: boltId, y: hFrac [0=top..1=ground], z: branchOffset, w: seed
+  const boltMeta = new Float32Array(totalVerts * 4);
 
   let vCursor = 0;
+  const pushVert = (b, h, bOff, seed) => {
+    const v4 = vCursor * 4;
+    boltMeta[v4] = b;
+    boltMeta[v4 + 1] = h;
+    boltMeta[v4 + 2] = bOff;
+    boltMeta[v4 + 3] = seed;
+    vCursor++;
+  };
+
   for (let b = 0; b < boltCount; b++) {
-    // Main trunk segments (top cloud base 0.0 -> water/ground 1.0)
     for (let s = 0; s < segsPerBolt; s++) {
-      const h0 = s / segsPerBolt;
-      const h1 = (s + 1) / segsPerBolt;
-      for (const h of [h0, h1]) {
-        boltMeta[vCursor * 4] = b;
-        boltMeta[vCursor * 4 + 1] = h;
-        boltMeta[vCursor * 4 + 2] = 0.0;
-        boltMeta[vCursor * 4 + 3] = s * 1.37 + b * 7.13;
-        vCursor++;
-      }
+      const seed = s * 1.37 + b * 7.13;
+      pushVert(b, s / segsPerBolt, 0.0, seed);
+      pushVert(b, (s + 1) / segsPerBolt, 0.0, seed);
     }
-    // 2 forked side branches splitting off at h = 0.32 and h = 0.58
     for (let br = 0; br < 2; br++) {
       const startH = br === 0 ? 0.32 : 0.58;
       const dirSign = br === 0 ? 1.0 : -1.0;
       for (let s = 0; s < 6; s++) {
-        const h0 = startH + (s / 6) * 0.28;
-        const h1 = startH + ((s + 1) / 6) * 0.28;
-        const bOff0 = dirSign * ((s / 6) * 34.0);
-        const bOff1 = dirSign * (((s + 1) / 6) * 34.0);
-        const pairs = [
-          [h0, bOff0],
-          [h1, bOff1],
-        ];
-        for (const [h, bOff] of pairs) {
-          boltMeta[vCursor * 4] = b;
-          boltMeta[vCursor * 4 + 1] = h;
-          boltMeta[vCursor * 4 + 2] = bOff;
-          boltMeta[vCursor * 4 + 3] = (s + 20) * 2.11 + b * 11.3;
-          vCursor++;
-        }
+        const seed = (s + 20) * 2.11 + b * 11.3;
+        pushVert(b, startH + (s / 6) * 0.28, dirSign * (s / 6) * 34.0, seed);
+        pushVert(b, startH + ((s + 1) / 6) * 0.28, dirSign * ((s + 1) / 6) * 34.0, seed);
       }
     }
   }
@@ -1276,14 +953,11 @@ function createLightningBoltSystem(boltCount = 6, segsPerBolt = 18) {
         float hFrac = aBoltMeta.y;
         float branchOff = aBoltMeta.z;
 
-        // Quantized strike cycle so each bolt teleports to a new strike point per flash
         float cycleRate = 2.6 + boltId * 0.45;
         float strikeCycle = floor(uTime * cycleRate + boltId * 1.9);
         float cyclePhase = fract(uTime * cycleRate + boltId * 1.9);
 
-        // Double-pulse restrike flicker within active strike window
-        float dutyWindow = 0.14 + uLightningIntensity * 0.28;
-        float inWindow = step(cyclePhase, dutyWindow);
+        float inWindow = step(cyclePhase, 0.14 + uLightningIntensity * 0.28);
         float flicker = sin(cyclePhase * 62.0) * 0.5 + 0.5;
         vBoltAlpha = inWindow * (0.45 + 0.55 * flicker) * smoothstep(0.0, 0.08, uLightningIntensity);
         vIsBranch = abs(branchOff) > 0.1 ? 1.0 : 0.0;
@@ -1292,20 +966,15 @@ function createLightningBoltSystem(boltCount = 6, segsPerBolt = 18) {
         float radius = 30.0 + hash12(vec2(strikeCycle, boltId + 3.7)) * 210.0;
         vec2 strikeOriginXZ = uVortexAndTide.xy + vec2(cos(angle), sin(angle)) * radius;
 
-        // Sharp electrical zigzag displacement at each segment joint
-        float jagX = (hash12(vec2(hFrac * 18.0, strikeCycle + boltId)) - 0.5) * 28.0 * sin(hFrac * 3.14159);
-        float jagZ = (hash12(vec2(strikeCycle - boltId, hFrac * 18.0)) - 0.5) * 28.0 * sin(hFrac * 3.14159);
-
-        float topY = uCloudBaseY + 38.0;
-        float botY = uVortexAndTide.w;
-        float y = mix(topY, botY, hFrac);
+        float jagScale = 28.0 * sin(hFrac * 3.14159);
+        float jagX = (hash12(vec2(hFrac * 18.0, strikeCycle + boltId)) - 0.5) * jagScale;
+        float jagZ = (hash12(vec2(strikeCycle - boltId, hFrac * 18.0)) - 0.5) * jagScale;
 
         vec3 worldPos = vec3(
           strikeOriginXZ.x + jagX + branchOff,
-          y,
+          mix(uCloudBaseY + 38.0, uVortexAndTide.w, hFrac),
           strikeOriginXZ.y + jagZ + branchOff * 0.65
         );
-
         gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
       }
     `,
@@ -1329,58 +998,56 @@ function createLightningBoltSystem(boltCount = 6, segsPerBolt = 18) {
 const lightningSystem = createLightningBoltSystem(6, 18);
 baseScene.add(lightningSystem.lines);
 
-// Sync scene directional light, sky colors, fog, lightning, and rain/vortex state with AtmosphereLayer
 function syncSceneLighting() {
-  const sunDir = atmosphere.getSunDirection();
-  sunLight.position.copy(sunDir).multiplyScalar(600);
-  sunLight.color.setHex(atmosphere.state.sunColor);
+  const s = atmosphere.state;
+  sunLight.position.copy(atmosphere.getSunDirection()).multiplyScalar(600);
+  sunLight.color.setHex(s.sunColor);
+  sunLight.intensity = s.sunIntensity * 0.82 * (1.0 - Math.max(s.rainIntensity, hydroState.tornadoStrength * 0.8) * 0.38);
 
-  const stormDampen = 1.0 - Math.max(atmosphere.state.rainIntensity, hydroState.tornadoStrength * 0.8) * 0.38;
-  sunLight.intensity = atmosphere.state.sunIntensity * 0.82 * stormDampen;
+  baseScene.background.setHex(s.skyColor);
+  baseScene.fog.color.copy(baseScene.background);
+  baseScene.fog.density = 0.00005 + s.fogDensity * 0.0022 + s.rainIntensity * 0.00035;
 
-  const skyCol = new THREE.Color(atmosphere.state.skyColor);
-  baseScene.background.copy(skyCol);
-  baseScene.fog.color.copy(skyCol);
-  baseScene.fog.density =
-    0.00005 +
-    atmosphere.state.fogDensity * 0.0022 +
-    atmosphere.state.rainIntensity * 0.00035;
-
-  uRainSplashUniform.value = atmosphere.state.rainIntensity;
+  uRainSplashUniform.value = s.rainIntensity;
   uTornadoStrengthUniform.value = hydroState.tornadoStrength;
-  rainSystem.lines.visible = atmosphere.state.rainIntensity > 0.01;
-  rainSystem.mat.uniforms.uRainIntensity.value = atmosphere.state.rainIntensity;
-  rainSystem.mat.uniforms.uCloudBaseY.value = atmosphere.state.baseAltitude;
 
-  lightningSystem.lines.visible = atmosphere.state.lightningIntensity > 0.01;
-  lightningSystem.mat.uniforms.uLightningIntensity.value = atmosphere.state.lightningIntensity;
-  lightningSystem.mat.uniforms.uCloudBaseY.value = atmosphere.state.baseAltitude;
+  rainSystem.lines.visible = s.rainIntensity > 0.01;
+  rainSystem.mat.uniforms.uRainIntensity.value = s.rainIntensity;
+  rainSystem.mat.uniforms.uCloudBaseY.value = s.baseAltitude;
+
+  lightningSystem.lines.visible = s.lightningIntensity > 0.01;
+  lightningSystem.mat.uniforms.uLightningIntensity.value = s.lightningIntensity;
+  lightningSystem.mat.uniforms.uCloudBaseY.value = s.baseAltitude;
 }
 syncSceneLighting();
 
-// Wire up HUD controls
-const ctrlStorm = document.getElementById('ctrl-storm');
-const ctrlGenus = document.getElementById('ctrl-genus');
-const ctrlTornado = document.getElementById('ctrl-tornado');
-const ctrlHurricane = document.getElementById('ctrl-hurricane');
-const ctrlTsunami = document.getElementById('ctrl-tsunami');
-const ctrlWhirlpool = document.getElementById('ctrl-whirlpool');
-const ctrlTide = document.getElementById('ctrl-tide');
-const ctrlTerrainMorph = document.getElementById('ctrl-terrain-morph');
-const ctrlPeakHeight = document.getElementById('ctrl-peak-height');
-const ctrlCanyonDepth = document.getElementById('ctrl-canyon-depth');
-const ctrlCoverage = document.getElementById('ctrl-coverage');
-const ctrlDensity = document.getElementById('ctrl-density');
-const ctrlRain = document.getElementById('ctrl-rain');
-const ctrlLightning = document.getElementById('ctrl-lightning');
-const ctrlFog = document.getElementById('ctrl-fog');
-const ctrlBase = document.getElementById('ctrl-base');
-const ctrlSun = document.getElementById('ctrl-sun');
-const ctrlWind = document.getElementById('ctrl-wind');
-const ctrlSteps = document.getElementById('ctrl-steps');
-const ctrlDebug = document.getElementById('ctrl-debug');
-const elGenusInfo = document.getElementById('genus-info');
-const elDebugCaption = document.getElementById('debug-caption');
+// Wire up HUD controls concisely
+const ctrlStorm = $('ctrl-storm');
+const ctrlGenus = $('ctrl-genus');
+const ctrlTornado = $('ctrl-tornado');
+const ctrlHurricane = $('ctrl-hurricane');
+const ctrlTsunami = $('ctrl-tsunami');
+const ctrlWhirlpool = $('ctrl-whirlpool');
+const ctrlTide = $('ctrl-tide');
+const ctrlTerrainMorph = $('ctrl-terrain-morph');
+const ctrlPeakHeight = $('ctrl-peak-height');
+const ctrlCanyonDepth = $('ctrl-canyon-depth');
+const ctrlCoverage = $('ctrl-coverage');
+const ctrlDensity = $('ctrl-density');
+const ctrlRain = $('ctrl-rain');
+const ctrlLightning = $('ctrl-lightning');
+const ctrlFog = $('ctrl-fog');
+const ctrlBase = $('ctrl-base');
+const ctrlSun = $('ctrl-sun');
+const ctrlWind = $('ctrl-wind');
+const ctrlSteps = $('ctrl-steps');
+const ctrlDebug = $('ctrl-debug');
+const elGenusInfo = $('genus-info');
+const elDebugCaption = $('debug-caption');
+const elFps = $('stat-fps');
+const elGpu = $('stat-gpu');
+const elClusters = $('stat-clusters');
+const elTopo = $('stat-topology');
 
 const DEBUG_CAPTIONS = [
   'Mode 1 (Final Composite): Full volumetric clouds, Rankine tornado funnel, vertex-displaced tsunami/whirlpool waves, and DSU particle physics.',
@@ -1406,108 +1073,83 @@ function formatTideLabel(lvl) {
 }
 
 function refreshControlReadouts() {
-  if (ctrlStorm) ctrlStorm.value = atmosphere.state.stormType;
-  ctrlGenus.value = atmosphere.state.cloudGenus;
+  const s = atmosphere.state;
+  ctrlStorm.value = s.stormType;
+  ctrlGenus.value = s.cloudGenus;
   ctrlTornado.value = hydroState.tornadoStrength;
-  if (ctrlHurricane) ctrlHurricane.value = hydroState.hurricaneStrength;
+  ctrlHurricane.value = hydroState.hurricaneStrength;
   ctrlTsunami.value = hydroState.tsunamiStrength;
   ctrlWhirlpool.value = hydroState.whirlpoolStrength;
   ctrlTide.value = hydroState.waterLevel;
   ctrlTerrainMorph.value = terrainState.morph;
   ctrlPeakHeight.value = terrainState.peakHeight;
   ctrlCanyonDepth.value = terrainState.canyonDepth;
-  ctrlCoverage.value = atmosphere.state.coverage;
-  ctrlDensity.value = atmosphere.state.densityMultiplier;
-  ctrlRain.value = atmosphere.state.rainIntensity;
-  ctrlLightning.value = atmosphere.state.lightningIntensity;
-  ctrlFog.value = atmosphere.state.fogDensity;
-  ctrlBase.value = atmosphere.state.baseAltitude;
-  ctrlSun.value = atmosphere.state.sunElevationDeg;
-  ctrlWind.value = atmosphere.state.windSpeed;
-  ctrlSteps.value = atmosphere.state.maxSteps;
-  ctrlDebug.value = String(atmosphere.state.debugMode);
+  ctrlCoverage.value = s.coverage;
+  ctrlDensity.value = s.densityMultiplier;
+  ctrlRain.value = s.rainIntensity;
+  ctrlLightning.value = s.lightningIntensity;
+  ctrlFog.value = s.fogDensity;
+  ctrlBase.value = s.baseAltitude;
+  ctrlSun.value = s.sunElevationDeg;
+  ctrlWind.value = s.windSpeed;
+  ctrlSteps.value = s.maxSteps;
+  ctrlDebug.value = String(s.debugMode);
 
-  document.getElementById('val-tornado').textContent = `${Math.round(hydroState.tornadoStrength * 100)}%`;
-  const elValHurr = document.getElementById('val-hurricane');
-  if (elValHurr) {
-    elValHurr.textContent = `${Math.round(hydroState.hurricaneStrength * 100)}%`;
-  }
-  document.getElementById('val-tsunami').textContent = `${Math.round(hydroState.tsunamiStrength * 100)}%`;
-  document.getElementById('val-whirlpool').textContent = `${Math.round(hydroState.whirlpoolStrength * 100)}%`;
-  document.getElementById('val-tide').textContent = formatTideLabel(hydroState.waterLevel);
+  $('val-tornado').textContent = `${Math.round(hydroState.tornadoStrength * 100)}%`;
+  $('val-hurricane').textContent = `${Math.round(hydroState.hurricaneStrength * 100)}%`;
+  $('val-tsunami').textContent = `${Math.round(hydroState.tsunamiStrength * 100)}%`;
+  $('val-whirlpool').textContent = `${Math.round(hydroState.whirlpoolStrength * 100)}%`;
+  $('val-tide').textContent = formatTideLabel(hydroState.waterLevel);
+  $('val-terrain-morph').textContent = formatMorphLabel(terrainState.morph);
+  $('val-peak-height').textContent = `${Math.round(terrainState.peakHeight)} m`;
+  $('val-canyon-depth').textContent = `${Math.round(terrainState.canyonDepth * 100)}%`;
+  $('val-coverage').textContent = `${Math.round(s.coverage * 100)}%`;
+  $('val-density').textContent = `${s.densityMultiplier.toFixed(2)}×`;
+  $('val-rain').textContent = `${Math.round(s.rainIntensity * 100)}%`;
+  $('val-lightning').textContent = `${Math.round(s.lightningIntensity * 100)}%`;
+  $('val-fog').textContent = `${Math.round(s.fogDensity * 100)}%`;
+  $('val-base').textContent = `${s.baseAltitude} m`;
+  $('val-sun').textContent = `${s.sunElevationDeg}°`;
+  $('val-wind').textContent = `${s.windSpeed} m/s`;
+  $('val-steps').textContent = `${s.maxSteps}`;
+  elTopo.textContent = `${terrainState.islandCount} Isl / ${terrainState.waterBasinCount} Sea`;
 
-  document.getElementById('val-terrain-morph').textContent = formatMorphLabel(terrainState.morph);
-  document.getElementById('val-peak-height').textContent = `${Math.round(terrainState.peakHeight)} m`;
-  document.getElementById('val-canyon-depth').textContent = `${Math.round(terrainState.canyonDepth * 100)}%`;
-
-  document.getElementById('val-coverage').textContent = `${Math.round(atmosphere.state.coverage * 100)}%`;
-  document.getElementById('val-density').textContent = `${atmosphere.state.densityMultiplier.toFixed(2)}×`;
-  document.getElementById('val-rain').textContent = `${Math.round(atmosphere.state.rainIntensity * 100)}%`;
-  document.getElementById('val-lightning').textContent = `${Math.round(atmosphere.state.lightningIntensity * 100)}%`;
-  document.getElementById('val-fog').textContent = `${Math.round(atmosphere.state.fogDensity * 100)}%`;
-  document.getElementById('val-base').textContent = `${atmosphere.state.baseAltitude} m`;
-  document.getElementById('val-sun').textContent = `${atmosphere.state.sunElevationDeg}°`;
-  document.getElementById('val-wind').textContent = `${atmosphere.state.windSpeed} m/s`;
-  document.getElementById('val-steps').textContent = `${atmosphere.state.maxSteps}`;
-
-  const elTopo = document.getElementById('stat-topology');
-  if (elTopo) {
-    elTopo.textContent = `${terrainState.islandCount} Isl / ${terrainState.waterBasinCount} Sea`;
-  }
-
-  const genusMeta = CLOUD_GENERA[atmosphere.state.cloudGenus];
-  const stormMeta = STORM_TYPES[atmosphere.state.stormType];
-  if (genusMeta && elGenusInfo) {
-    const stormBanner =
-      stormMeta && atmosphere.state.stormType !== 'none'
-        ? `<strong>[${stormMeta.name}]</strong> ${stormMeta.description}<br/>`
-        : '';
-    elGenusInfo.innerHTML = `${stormBanner}<strong>${genusMeta.name} · ${genusMeta.etage}:</strong> ${genusMeta.description}`;
-  }
-
-  if (elDebugCaption) {
-    elDebugCaption.textContent = DEBUG_CAPTIONS[atmosphere.state.debugMode];
-  }
+  const genusMeta = CLOUD_GENERA[s.cloudGenus];
+  const stormMeta = STORM_TYPES[s.stormType];
+  const stormBanner = stormMeta && s.stormType !== 'none' ? `<strong>[${stormMeta.name}]</strong> ${stormMeta.description}<br/>` : '';
+  elGenusInfo.innerHTML = `${stormBanner}<strong>${genusMeta.name} · ${genusMeta.etage}:</strong> ${genusMeta.description}`;
+  elDebugCaption.textContent = DEBUG_CAPTIONS[s.debugMode];
 }
 refreshControlReadouts();
 
+const clearActivePresets = () => document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+const syncVortexAndUI = () => {
+  atmosphere.setVortexAndTide(hydroState.tornadoX, hydroState.tornadoZ, hydroState.tornadoStrength, hydroState.waterLevel);
+  syncSceneLighting();
+  refreshControlReadouts();
+};
+
 document.querySelectorAll('.preset-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+    clearActivePresets();
     btn.classList.add('active');
     atmosphere.applyPreset(btn.dataset.preset);
     hydroState.tornadoStrength = atmosphere.state.tornadoStrength;
     hydroState.hurricaneStrength = atmosphere.state.hurricaneStrength;
-    atmosphere.setVortexAndTide(
-      hydroState.tornadoX,
-      hydroState.tornadoZ,
-      hydroState.tornadoStrength,
-      hydroState.waterLevel
-    );
-    syncSceneLighting();
-    refreshControlReadouts();
+    syncVortexAndUI();
   });
 });
 
-if (ctrlStorm) {
-  ctrlStorm.addEventListener('change', (e) => {
-    document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
-    atmosphere.setStormType(e.target.value);
-    hydroState.tornadoStrength = atmosphere.state.tornadoStrength;
-    hydroState.hurricaneStrength = atmosphere.state.hurricaneStrength;
-    atmosphere.setVortexAndTide(
-      hydroState.tornadoX,
-      hydroState.tornadoZ,
-      hydroState.tornadoStrength,
-      hydroState.waterLevel
-    );
-    syncSceneLighting();
-    refreshControlReadouts();
-  });
-}
+ctrlStorm.addEventListener('change', (e) => {
+  clearActivePresets();
+  atmosphere.setStormType(e.target.value);
+  hydroState.tornadoStrength = atmosphere.state.tornadoStrength;
+  hydroState.hurricaneStrength = atmosphere.state.hurricaneStrength;
+  syncVortexAndUI();
+});
 
 ctrlGenus.addEventListener('change', (e) => {
-  document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+  clearActivePresets();
   atmosphere.setCloudGenus(e.target.value);
   syncSceneLighting();
   refreshControlReadouts();
@@ -1515,28 +1157,19 @@ ctrlGenus.addEventListener('change', (e) => {
 
 ctrlTornado.addEventListener('input', (e) => {
   hydroState.tornadoStrength = parseFloat(e.target.value);
-  atmosphere.setVortexAndTide(
-    hydroState.tornadoX,
-    hydroState.tornadoZ,
-    hydroState.tornadoStrength,
-    hydroState.waterLevel
-  );
+  syncVortexAndUI();
+});
+
+ctrlHurricane.addEventListener('input', (e) => {
+  hydroState.hurricaneStrength = parseFloat(e.target.value);
+  atmosphere.setEnvironment({
+    hurricaneStrength: hydroState.hurricaneStrength,
+    stormType: hydroState.hurricaneStrength > 0.05 ? 'hurricane' : 'none',
+    stormTypeId: hydroState.hurricaneStrength > 0.05 ? 3 : 0,
+  });
   syncSceneLighting();
   refreshControlReadouts();
 });
-
-if (ctrlHurricane) {
-  ctrlHurricane.addEventListener('input', (e) => {
-    hydroState.hurricaneStrength = parseFloat(e.target.value);
-    atmosphere.setEnvironment({
-      hurricaneStrength: hydroState.hurricaneStrength,
-      stormType: hydroState.hurricaneStrength > 0.05 ? 'hurricane' : 'none',
-      stormTypeId: hydroState.hurricaneStrength > 0.05 ? 3 : 0,
-    });
-    syncSceneLighting();
-    refreshControlReadouts();
-  });
-}
 
 ctrlTsunami.addEventListener('input', (e) => {
   hydroState.tsunamiStrength = parseFloat(e.target.value);
@@ -1550,95 +1183,82 @@ ctrlWhirlpool.addEventListener('input', (e) => {
 
 ctrlTide.addEventListener('input', (e) => {
   hydroState.waterLevel = parseFloat(e.target.value);
-  atmosphere.setVortexAndTide(
-    hydroState.tornadoX,
-    hydroState.tornadoZ,
-    hydroState.tornadoStrength,
-    hydroState.waterLevel
-  );
+  atmosphere.setVortexAndTide(hydroState.tornadoX, hydroState.tornadoZ, hydroState.tornadoStrength, hydroState.waterLevel);
   terrain.updateGeometry();
   refreshControlReadouts();
 });
 
-ctrlTerrainMorph.addEventListener('input', (e) => {
-  terrainState.morph = parseFloat(e.target.value);
-  terrain.updateGeometry();
-  refreshControlReadouts();
-});
+for (const [el, key] of [
+  [ctrlTerrainMorph, 'morph'],
+  [ctrlPeakHeight, 'peakHeight'],
+  [ctrlCanyonDepth, 'canyonDepth'],
+]) {
+  el.addEventListener('input', (e) => {
+    terrainState[key] = parseFloat(e.target.value);
+    terrain.updateGeometry();
+    refreshControlReadouts();
+  });
+}
 
-ctrlPeakHeight.addEventListener('input', (e) => {
-  terrainState.peakHeight = parseFloat(e.target.value);
-  terrain.updateGeometry();
-  refreshControlReadouts();
-});
-
-ctrlCanyonDepth.addEventListener('input', (e) => {
-  terrainState.canyonDepth = parseFloat(e.target.value);
-  terrain.updateGeometry();
-  refreshControlReadouts();
-});
-
-ctrlCoverage.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ coverage: parseFloat(e.target.value) });
-  refreshControlReadouts();
-});
-
-ctrlDensity.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ densityMultiplier: parseFloat(e.target.value) });
-  refreshControlReadouts();
-});
-
-ctrlRain.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ rainIntensity: parseFloat(e.target.value) });
-  syncSceneLighting();
-  refreshControlReadouts();
-});
-
-ctrlLightning.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ lightningIntensity: parseFloat(e.target.value) });
-  syncSceneLighting();
-  refreshControlReadouts();
-});
-
-ctrlFog.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ fogDensity: parseFloat(e.target.value) });
-  syncSceneLighting();
-  refreshControlReadouts();
-});
-
-ctrlBase.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ baseAltitude: parseFloat(e.target.value) });
-  syncSceneLighting();
-  refreshControlReadouts();
-});
-
-ctrlSun.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ sunElevationDeg: parseFloat(e.target.value) });
-  syncSceneLighting();
-  refreshControlReadouts();
-});
-
-ctrlWind.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ windSpeed: parseFloat(e.target.value) });
-  refreshControlReadouts();
-});
-
-ctrlSteps.addEventListener('input', (e) => {
-  atmosphere.setEnvironment({ maxSteps: parseInt(e.target.value, 10) });
-  refreshControlReadouts();
-});
+for (const [el, key, needsLightSync] of [
+  [ctrlCoverage, 'coverage', false],
+  [ctrlDensity, 'densityMultiplier', false],
+  [ctrlRain, 'rainIntensity', true],
+  [ctrlLightning, 'lightningIntensity', true],
+  [ctrlFog, 'fogDensity', true],
+  [ctrlBase, 'baseAltitude', true],
+  [ctrlSun, 'sunElevationDeg', true],
+  [ctrlWind, 'windSpeed', false],
+  [ctrlSteps, 'maxSteps', false],
+]) {
+  el.addEventListener('input', (e) => {
+    atmosphere.setEnvironment({ [key]: parseFloat(e.target.value) });
+    if (needsLightSync) syncSceneLighting();
+    refreshControlReadouts();
+  });
+}
 
 ctrlDebug.addEventListener('change', (e) => {
   atmosphere.setDebugMode(parseInt(e.target.value, 10));
   refreshControlReadouts();
 });
 
+const _navFwd = new THREE.Vector3();
+const _navRight = new THREE.Vector3();
+const _navUp = new THREE.Vector3(0, 1, 0);
+
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key >= '1' && e.key <= '4') {
     atmosphere.setDebugMode(parseInt(e.key, 10) - 1);
     refreshControlReadouts();
+    return;
   }
+  const k = e.key.toLowerCase();
+  camera.getWorldDirection(_navFwd);
+  _navRight.crossVectors(_navFwd, _navUp).normalize();
+  const step = e.shiftKey ? 28 : 14;
+  if (k === 'w' || e.key === 'ArrowUp') {
+    camera.position.addScaledVector(_navFwd, step);
+    controls.target.addScaledVector(_navFwd, step);
+  } else if (k === 's' || e.key === 'ArrowDown') {
+    camera.position.addScaledVector(_navFwd, -step);
+    controls.target.addScaledVector(_navFwd, -step);
+  } else if (k === 'a' || e.key === 'ArrowLeft') {
+    camera.position.addScaledVector(_navRight, -step);
+    controls.target.addScaledVector(_navRight, -step);
+  } else if (k === 'd' || e.key === 'ArrowRight') {
+    camera.position.addScaledVector(_navRight, step);
+    controls.target.addScaledVector(_navRight, step);
+  } else if (k === 'e' || k === '=' || k === '+') {
+    camera.position.lerp(controls.target, 0.14);
+  } else if (k === 'q' || k === '-') {
+    camera.position.lerp(controls.target, -0.16);
+  } else if (k === 'r') {
+    camera.position.set(-165, 64, 265);
+    controls.target.set(0, 68, 0);
+  }
+  controls.update();
 });
 
 // Single-pass hardware bilinear upsample & premultiplied-alpha composite shader
@@ -1665,26 +1285,28 @@ const blitMat = new THREE.ShaderMaterial({
     void main() {
       vec4 baseCol = texture2D(tBaseScene, vUv);
       vec4 cloudCol = texture2D(tCloudLayer, vUv);
-      // Premultiplied-alpha hardware bilinear composite
       gl_FragColor = vec4(baseCol.rgb * (1.0 - cloudCol.a) + cloudCol.rgb, 1.0);
     }
   `,
 });
 blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
 
-window.addEventListener('resize', () => {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-
-  renderer.setSize(w, h);
+function syncRenderTargets() {
   renderer.getDrawingBufferSize(drawingSize);
   sceneTarget.setSize(drawingSize.x, drawingSize.y);
   const cw = Math.max(1, Math.floor(drawingSize.x * CLOUD_RES_SCALE));
   const ch = Math.max(1, Math.floor(drawingSize.y * CLOUD_RES_SCALE));
   cloudTarget.setSize(cw, ch);
   atmosphere.resize(cw, ch);
+}
+
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  syncRenderTargets();
 });
 
 const startTime = performance.now();
@@ -1694,51 +1316,51 @@ let fpsAccumTime = 0;
 let isContextLost = false;
 let rafId = null;
 
-const elFps = document.getElementById('stat-fps');
-const elGpu = document.getElementById('stat-gpu');
-const elClusters = document.getElementById('stat-clusters');
+canvas.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  isContextLost = true;
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  atmosphere.onContextLost();
+  elFps.textContent = 'CTX LOST';
+  elGpu.textContent = '-- ms';
+}, false);
 
-canvas.addEventListener(
-  'webglcontextlost',
-  (event) => {
-    event.preventDefault();
-    isContextLost = true;
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
-    }
-    atmosphere.onContextLost();
-    elFps.textContent = 'CTX LOST';
-    elGpu.textContent = '-- ms';
-  },
-  false
-);
-
-canvas.addEventListener(
-  'webglcontextrestored',
-  () => {
-    isContextLost = false;
-    renderer.getDrawingBufferSize(drawingSize);
-    sceneTarget.setSize(drawingSize.x, drawingSize.y);
-    const cw = Math.max(1, Math.floor(drawingSize.x * CLOUD_RES_SCALE));
-    const ch = Math.max(1, Math.floor(drawingSize.y * CLOUD_RES_SCALE));
-    cloudTarget.setSize(cw, ch);
-
-    atmosphere.onContextRestored(renderer);
-    atmosphere.setSceneDepthTexture(depthTexture);
-    atmosphere.resize(cw, ch);
-    syncSceneLighting();
-
-    lastFrameTime = performance.now();
-    rafId = requestAnimationFrame(animate);
-  },
-  false
-);
+canvas.addEventListener('webglcontextrestored', () => {
+  isContextLost = false;
+  atmosphere.onContextRestored(renderer);
+  atmosphere.setSceneDepthTexture(depthTexture);
+  syncRenderTargets();
+  syncSceneLighting();
+  lastFrameTime = performance.now();
+  rafId = requestAnimationFrame(animate);
+}, false);
 
 const _upVec = new THREE.Vector3();
 const _fwdVec = new THREE.Vector3();
 const _rightVec = new THREE.Vector3();
 const _rotMat = new THREE.Matrix4();
+const _windVecXZ = { x: 0.0, y: 0.0 };
+const _tornadoCenterXZ = { x: 0.0, y: 0.0 };
+const _whirlpoolCenterXZ = { x: 0.0, y: -10.0 };
+let _currentElapsed = 0.0;
+const _sampleWaterNow = (x, z) => sampleWaterSurfaceHeight(x, z, _currentElapsed);
+const _particleParams = {
+  windVecXZ: _windVecXZ,
+  tornadoStrength: 0.0,
+  tornadoCenterXZ: _tornadoCenterXZ,
+  hurricaneStrength: 0.0,
+  whirlpoolStrength: 0.0,
+  whirlpoolCenterXZ: _whirlpoolCenterXZ,
+  tsunamiStrength: 0.0,
+  tsunamiZ: 280.0,
+  waterLevel: 0.0,
+  cloudBaseY: 92.0,
+  sampleTerrain: terrain.sampleHeightAndGradient,
+  sampleWaterHeight: _sampleWaterNow,
+};
 
 function animate(now) {
   if (isContextLost) return;
@@ -1747,39 +1369,20 @@ function animate(now) {
   const dt = Math.min((now - lastFrameTime) * 0.001, 0.05);
   lastFrameTime = now;
   const elapsed = (now - startTime) * 0.001;
+  _currentElapsed = elapsed;
 
   controls.update();
 
-  // 1. Update Tornado path (patrols along the central fjord waterway) & Tsunami wave propagation
   const tornadoZ = Math.sin(elapsed * 0.22) * 165.0 + 40.0;
   const tornadoX = getMainFjordX(tornadoZ);
   hydroState.tornadoX = tornadoX;
   hydroState.tornadoZ = tornadoZ;
-
-  // Propagate Tsunami soliton wave from +380m (South fjord mouth) to -380m (North canyon)
   hydroState.tsunamiZ = 380.0 - ((elapsed * 75.0) % 760.0);
 
-  // Sync ocean vertex shader uniforms & volumetric atmosphere vortex uniforms
-  uHydroParamsA.value.set(
-    hydroState.tsunamiStrength,
-    hydroState.tsunamiZ,
-    hydroState.whirlpoolStrength,
-    hydroState.waterLevel
-  );
-  uHydroParamsB.value.set(
-    hydroState.whirlpoolX,
-    hydroState.whirlpoolZ,
-    hydroState.tornadoX,
-    hydroState.tornadoZ
-  );
-  atmosphere.setVortexAndTide(
-    hydroState.tornadoX,
-    hydroState.tornadoZ,
-    hydroState.tornadoStrength,
-    hydroState.waterLevel
-  );
+  uHydroParamsA.value.set(hydroState.tsunamiStrength, hydroState.tsunamiZ, hydroState.whirlpoolStrength, hydroState.waterLevel);
+  uHydroParamsB.value.set(hydroState.whirlpoolX, hydroState.whirlpoolZ, tornadoX, tornadoZ);
+  atmosphere.setVortexAndTide(tornadoX, tornadoZ, hydroState.tornadoStrength, hydroState.waterLevel);
 
-  // 2. Advance Saronic ASV fleet along flooded gorges with 6-DOF wave-riding heave, pitch & roll
   for (const v of fleet) {
     const t = elapsed * v.speed + v.phase;
     const pNow = sampleFleetWaterwayPath(v.routeType, t);
@@ -1790,43 +1393,35 @@ function animate(now) {
     const hFwd = sampleWaterSurfaceHeight(pNow.x, pNow.z + 3.0, elapsed);
 
     v.group.position.set(pNow.x, hCenter + 0.15, pNow.z);
-
-    // Compute wave surface normal and align vessel orientation (heading + wave pitch/roll)
     _upVec.set(hCenter - hRight, 3.0, hCenter - hFwd).normalize();
     _fwdVec.set(pNext.x - pNow.x, 0.0, pNext.z - pNow.z).normalize();
     _rightVec.crossVectors(_upVec, _fwdVec).normalize();
     _fwdVec.crossVectors(_rightVec, _upVec).normalize();
-
     _rotMat.makeBasis(_rightVec, _upVec, _fwdVec);
     v.group.quaternion.setFromRotationMatrix(_rotMat);
   }
 
-  // 3. Advance Lagrangian Vortex/Wave Particles + Spatial Hash Grid + Disjoint-Set Union-Find Clustering
   const windAngle = THREE.MathUtils.degToRad(32);
-  const windVecXZ = {
-    x: Math.cos(windAngle) * atmosphere.state.windSpeed,
-    y: Math.sin(windAngle) * atmosphere.state.windSpeed,
-  };
-  fluidClusterParticles.update(dt, {
-    windVecXZ,
-    tornadoStrength: hydroState.tornadoStrength,
-    tornadoCenterXZ: { x: hydroState.tornadoX, y: hydroState.tornadoZ },
-    hurricaneStrength: hydroState.hurricaneStrength,
-    whirlpoolStrength: hydroState.whirlpoolStrength,
-    whirlpoolCenterXZ: { x: hydroState.whirlpoolX, y: hydroState.whirlpoolZ },
-    tsunamiStrength: hydroState.tsunamiStrength,
-    tsunamiZ: hydroState.tsunamiZ,
-    waterLevel: hydroState.waterLevel,
-    cloudBaseY: atmosphere.state.baseAltitude,
-    sampleTerrain: terrain.sampleHeightAndGradient,
-    sampleWaterHeight: (x, z) => sampleWaterSurfaceHeight(x, z, elapsed),
-  });
+  _windVecXZ.x = Math.cos(windAngle) * atmosphere.state.windSpeed;
+  _windVecXZ.y = Math.sin(windAngle) * atmosphere.state.windSpeed;
+  _tornadoCenterXZ.x = tornadoX;
+  _tornadoCenterXZ.y = tornadoZ;
+  _whirlpoolCenterXZ.x = hydroState.whirlpoolX;
+  _whirlpoolCenterXZ.y = hydroState.whirlpoolZ;
 
-  // 4. Update 3D rain streaks & 3D forked lightning bolts around storm
+  _particleParams.tornadoStrength = hydroState.tornadoStrength;
+  _particleParams.hurricaneStrength = hydroState.hurricaneStrength;
+  _particleParams.whirlpoolStrength = hydroState.whirlpoolStrength;
+  _particleParams.tsunamiStrength = hydroState.tsunamiStrength;
+  _particleParams.tsunamiZ = hydroState.tsunamiZ;
+  _particleParams.waterLevel = hydroState.waterLevel;
+  _particleParams.cloudBaseY = atmosphere.state.baseAltitude;
+  fluidClusterParticles.update(dt, _particleParams);
+
   if (rainSystem.lines.visible) {
     rainSystem.mat.uniforms.uTime.value = elapsed;
     rainSystem.mat.uniforms.uCameraPos.value.copy(camera.position);
-    rainSystem.mat.uniforms.uWindXZ.value.set(windVecXZ.x, windVecXZ.y);
+    rainSystem.mat.uniforms.uWindXZ.value.set(_windVecXZ.x, _windVecXZ.y);
   }
   if (lightningSystem.lines.visible) {
     lightningSystem.mat.uniforms.uTime.value = elapsed;
@@ -1834,23 +1429,23 @@ function animate(now) {
 
   atmosphere.update(elapsed, camera);
 
-  // Pass 1: Render opaque maritime scene + vertex-displaced ocean + GPU streamlines + DSU particles into offscreen target
+  // Pass 1: Opaque terrain, vertex-displaced ocean, GPU streamlines, 3D lightning, ASVs & DSU particles
   renderer.setRenderTarget(sceneTarget);
   renderer.clear();
   renderer.render(baseScene, camera);
 
-  // Pass 2: Hardware-accelerated half-resolution (0.5x) volumetric cloud raymarching pass
+  // Pass 2: Half-resolution (0.5x) volumetric cloud raymarching pass
   renderer.setRenderTarget(cloudTarget);
+  renderer.setClearColor(0x000000, 0.0);
   renderer.clear();
   atmosphere.beginGpuTimer();
   renderer.render(atmosphereScene, camera);
   atmosphere.endGpuTimer();
 
-  // Pass 3: Single-pass hardware bilinear upsample & premultiplied-alpha composite to screen
+  // Pass 3: Single-pass hardware bilinear upsample & premultiplied-alpha composite
   renderer.setRenderTarget(null);
   renderer.render(blitScene, blitCam);
 
-  // Update telemetry every 300 ms
   frameCount++;
   fpsAccumTime += dt;
   if (fpsAccumTime >= 0.3) {
@@ -1860,15 +1455,16 @@ function animate(now) {
       atmosphere.lastGpuPassMs !== null
         ? `${atmosphere.lastGpuPassMs.toFixed(2)} ms`
         : `${(1000 / Math.max(fps, 1)).toFixed(1)} ms (CPU)`;
-    if (elClusters) {
-      elClusters.textContent = `${fluidClusterParticles.activeClusters} (Max: ${fluidClusterParticles.largestCluster})`;
-    }
+    elClusters.textContent = `${fluidClusterParticles.activeClusters} (Max: ${fluidClusterParticles.largestCluster})`;
     frameCount = 0;
     fpsAccumTime = 0;
   }
 }
 
 window.simulationContext = {
+  renderer,
+  camera,
+  controls,
   atmosphere,
   terrain,
   fluidClusterParticles,
@@ -1879,6 +1475,8 @@ window.simulationContext = {
   formatMorphLabel,
   formatTideLabel,
   refreshControlReadouts,
+  syncVortexAndUI,
+  syncSceneLighting,
 };
 
 rafId = requestAnimationFrame(animate);
