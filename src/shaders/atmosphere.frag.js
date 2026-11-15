@@ -89,8 +89,8 @@ float remap(float val, float low1, float high1, float low2, float high2) {
 /**
  * Evaluates 3D topographic air-land interaction at worldPos:
  * - Solid landmass exclusion (clouds cannot exist inside rock)
- * - Potential-flow horizontal deflection around mountain flanks & into canyon gorges
- * - Orographic vertical lift over windward slopes + windward condensation / leeward dissipation
+ * - Potential-flow horizontal deflection around mountain flanks & funneling into gorges
+ * - Orographic vertical lift over windward ridges + windward condensation / leeward dissipation
  */
 void evaluateTopographicAirflow(
   vec3 worldPos,
@@ -113,6 +113,12 @@ void evaluateTopographicAirflow(
   outClearanceMask = smoothstep(outTerrainY + 0.5, outTerrainY + 18.0, worldPos.y);
 
   float altAboveTerrain = max(worldPos.y - outTerrainY, 0.0);
+  if (altAboveTerrain >= 135.0) {
+    outFlowOffsetXZ = vec2(0.0);
+    outOrographicLiftY = 0.0;
+    outOrographicMod = 0.0;
+    return;
+  }
   float interactionZone = 1.0 - smoothstep(0.0, 135.0, altAboveTerrain);
 
   float windLen = length(uWindAndTime.xy);
@@ -146,6 +152,10 @@ void evaluateTopographicAirflow(
 float evaluateTornadoFunnel(vec3 worldPos, vec3 boxMin, vec3 boxMax, float terrainY) {
   float tornadoStrength = uVortexAndTide.z;
   if (tornadoStrength <= 0.01) return 0.0;
+
+  // Fast bounding-cylinder rejection before any trig, pow, or 3D texture reads
+  vec2 roughRel = worldPos.xz - uVortexAndTide.xy;
+  if (dot(roughRel, roughRel) > 42000.0) return 0.0;
 
   float waterLevel = uVortexAndTide.w;
   float minFunnelY = max(terrainY, waterLevel);
@@ -226,7 +236,6 @@ float computeGenusHeightProfile(int genusId, float h, vec3 weather) {
     return max(tower, anvilSpread * 1.25);
   }
 }
-
 float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft) {
   outRainShaft = 0.0;
   vec3 boxMin = uBoundsMinAndFade.xyz;
@@ -322,7 +331,7 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
 
   // Sub-cloud region: evaluate both tornado funnel column and volumetric rain shafts (virga / spiral rainbands)
   if (liftedY < boxMin.y) {
-    if (rainIntensity > 0.01 && worldPos.y >= terrainY) {
+    if (highDetail && rainIntensity > 0.01 && worldPos.y >= terrainY) {
       float subH = clamp((worldPos.y - terrainY) / max(boxMin.y - terrainY, 10.0), 0.0, 1.0);
       vec2 shearXZ = globalXZ + uWindAndTime.xy * (boxMin.y - liftedY) * 0.06;
       vec2 rainUV = (shearXZ - boxMin.xz) / boxSize.xz + windOffset * 0.00085;
@@ -347,6 +356,7 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
     weather.r = max(weather.r, weather.b * 0.92);
     coverageBoost = 1.85;
   }
+
   float localCoverage = clamp((weather.r * (uBoundsMaxAndCoverage.w * coverageBoost) + orographicMod + stormBandBoost) * eyeClearMask, 0.0, 1.0);
   if (localCoverage <= 0.03) return funnelDensity * densityMult;
 
@@ -406,18 +416,18 @@ float sampleCloudDensity(vec3 worldPos, bool highDetail, out float outRainShaft)
 }
 
 float marchSunTransmittance(vec3 samplePos, vec3 sunDir) {
-  float stepLen = 14.0;
+  float stepLen = 18.0;
   float opticalDepth = 0.0;
   vec3 pos = samplePos;
   float dummyRain = 0.0;
   float maxSlabTop = uBoundsMaxAndCoverage.y + 65.0;
 
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 3; i++) {
     pos += sunDir * stepLen;
     if (pos.y > maxSlabTop) break;
     float d = sampleCloudDensity(pos, false, dummyRain);
     opticalDepth += d * stepLen;
-    stepLen *= 1.38;
+    stepLen *= 1.65;
   }
 
   float extinction = uWindAndTime.w;
@@ -470,7 +480,7 @@ void main() {
       ? mix(nearCol, midCol, normDepth / 0.45)
       : mix(midCol, farCol, (normDepth - 0.45) / 0.55);
     depthCol = mix(depthCol, vec3(1.0, 0.95, 0.75), contour * 0.35);
-    fragColor = vec4(depthCol, 0.92);
+    fragColor = vec4(depthCol * 0.92, 0.92);
     return;
   }
 
@@ -509,7 +519,7 @@ void main() {
     if (slicePos.y < terrainY + 2.0) {
       float rockRim = smoothstep(terrainY - 12.0, terrainY + 2.0, slicePos.y);
       vec3 rockCol = mix(vec3(0.14, 0.16, 0.20), vec3(1.0, 0.68, 0.20), rockRim);
-      fragColor = vec4(rockCol, 0.94);
+      fragColor = vec4(rockCol * 0.94, 0.94);
       return;
     }
 
@@ -534,7 +544,7 @@ void main() {
       vec3(0.22, 0.95, 1.0),
       thresholdRing * (sculptedDensity > 0.001 ? 0.75 : 0.0)
     );
-    fragColor = vec4(noiseVis, 0.94);
+    fragColor = vec4(noiseVis * 0.94, 0.94);
     return;
   }
 
@@ -567,11 +577,12 @@ void main() {
   float rainIntensity = uDebugParams.z;
   float tornadoStrength = uVortexAndTide.z;
   float hurricaneStrength = uWorldOriginOffset.w;
+  float lightningIntensity = uSunDirAndElevation.w;
 
-  // Stochastic volumetric sheet/core/eyewall lightning flash inside heavy storms, tornadoes, or hurricanes
-  float stormActivity = max(max(tornadoStrength, hurricaneStrength), (genusId == 9 || genusId == 5) ? rainIntensity : 0.0);
-  float flashWave = pow(max(sin(uWindAndTime.z * 7.3) * sin(uWindAndTime.z * 19.7), 0.0), 12.0);
-  float lightningPulse = stormActivity > 0.25 ? flashWave * stormActivity * 6.5 : 0.0;
+  // Stochastic volumetric sheet/core/eyewall lightning flash driven by Lightning slider or storm presets
+  float stormActivity = max(lightningIntensity, max(tornadoStrength, hurricaneStrength) * 0.85);
+  float flashWave = pow(max(sin(uWindAndTime.z * 7.3) * sin(uWindAndTime.z * 19.7), 0.0), 10.0);
+  float lightningPulse = stormActivity > 0.02 ? flashWave * stormActivity * 7.5 : 0.0;
   float flashAngle = uWindAndTime.z * 3.7;
   float flashRadius = hurricaneStrength > 0.2 ? 95.0 : 0.0;
   vec3 lightningOrigin = vec3(
@@ -585,12 +596,12 @@ void main() {
   float totalWeight = 0.0;
 
   for (int i = 0; i < 80; i++) {
-    if (i >= maxSteps || t >= tFar || transmittance < 0.008) {
+    if (i >= maxSteps || t >= tFar || transmittance < 0.015) {
       break;
     }
 
     vec3 pos = rayOrigin + rayDir * t;
-    float stepSize = inCloud ? baseStep : baseStep * 1.60;
+    float stepSize = inCloud ? baseStep : baseStep * 1.85;
     float rainShaft = 0.0;
     float density = sampleCloudDensity(pos, inCloud, rainShaft);
 
@@ -664,10 +675,10 @@ void main() {
 
   if (debugMode == 1) {
     vec3 transVis = vec3(transmittance);
-    if (transmittance <= 0.012) {
+    if (transmittance <= 0.015) {
       transVis = vec3(0.95, 0.35, 0.15);
     }
-    fragColor = vec4(transVis, 0.90);
+    fragColor = vec4(transVis * 0.90, 0.90);
     return;
   }
 
@@ -690,6 +701,7 @@ void main() {
   );
   cloudColor = mix(cloudColor, horizonColor, clamp(hazeFactor, 0.0, 0.62));
 
-  fragColor = vec4(cloudColor, alpha);
+  // Output premultiplied alpha for artifact-free hardware bilinear upsampling
+  fragColor = vec4(cloudColor * alpha, alpha);
 }
 `;
