@@ -260,7 +260,6 @@ export class LagrangianVortexParticleSystem {
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           float dist = max(-mvPosition.z, 10.0);
           vDistFade = 1.0 - smoothstep(280.0, 680.0, dist);
-
           // Coalesced Union-Find clusters render larger and brighter
           float basePointSize = mix(4.2, 10.5, vClusterFactor) * mix(1.0, 1.35, aPhase);
           gl_PointSize = clamp(basePointSize * (240.0 / dist), 1.5, 16.0);
@@ -316,6 +315,7 @@ export class LagrangianVortexParticleSystem {
       windVecXZ,
       tornadoStrength,
       tornadoCenterXZ,
+      hurricaneStrength = 0.0,
       whirlpoolStrength,
       whirlpoolCenterXZ,
       tsunamiStrength,
@@ -339,7 +339,7 @@ export class LagrangianVortexParticleSystem {
 
     // 2. Run Disjoint-Set Union-Find clustering across neighboring cells in O(N α(N))
     this.dsu.reset(n);
-    const coalesceRadius = 15.0 + tornadoStrength * 8.0 + whirlpoolStrength * 6.0;
+    const coalesceRadius = 15.0 + tornadoStrength * 8.0 + hurricaneStrength * 7.0 + whirlpoolStrength * 6.0;
     this.spatialGrid.clusterNeighbors(pos, vel, n, coalesceRadius, this.dsu);
 
     this.activeClusters = this.dsu.numComponents;
@@ -406,6 +406,29 @@ export class LagrangianVortexParticleSystem {
           airVz += tangZ * swirlSpeed + radZ * suctionSpeed;
           airVy += updraft;
           inTornado = wallProximity * tornadoStrength;
+        }
+      }
+
+      // A2) Category 5 Hurricane Eyewall & Spiral Band Vortex Field
+      if (hurricaneStrength > 0.01) {
+        const dxH = px - tornadoCenterXZ.x;
+        const dzH = pz - tornadoCenterXZ.y;
+        const rH = Math.sqrt(dxH * dxH + dzH * dzH) + 0.1;
+        const eyeWallR = 88.0;
+        if (rH < 62.0) {
+          // Calm low-pressure Hurricane Eye with gentle downward subsidence
+          airVx *= 0.25;
+          airVz *= 0.25;
+          airVy -= 6.5 * hurricaneStrength;
+        } else if (rH < 420.0) {
+          // Intense cyclonic eyewall tangential wind + inward convergence toward eyewall ring
+          const tangSpeed = 88.0 * hurricaneStrength * (eyeWallR / rH);
+          const eyeWallProximity = Math.exp(-Math.pow((rH - eyeWallR) / 36.0, 2.0));
+          const inflowSpeed = ((rH - eyeWallR) / rH) * 28.0 * hurricaneStrength;
+          airVx += (-dzH / rH) * tangSpeed - (dxH / rH) * inflowSpeed;
+          airVz += (dxH / rH) * tangSpeed - (dzH / rH) * inflowSpeed;
+          airVy += 54.0 * hurricaneStrength * eyeWallProximity;
+          inTornado = Math.max(inTornado, eyeWallProximity * hurricaneStrength);
         }
       }
 
