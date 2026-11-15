@@ -252,7 +252,7 @@ oceanMat.onBeforeCompile = (shader) => {
         vec2 cell = floor(p);
         vec2 f = fract(p) - 0.5;
         float h = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
-        phase = fract(t * 1.85 + h);
+        float phase = fract(t * 1.85 + h);
         float rad = phase * 0.46;
         float ring = 1.0 - smoothstep(0.0, 0.055, abs(length(f) - rad));
         return ring * (1.0 - phase) * step(0.42, h);
@@ -1271,7 +1271,7 @@ function refreshControlReadouts() {
   }
 
   if (elDebugCaption) {
-    elDebugCaption.textContent = DEBUG_CAPTIONS[atmosphere.state.debugMode] ?? DEBUG_CAPTIONS[0];
+    elDebugCaption.textContent = DEBUG_CAPTIONS[atmosphere.state.debugMode];
   }
 }
 refreshControlReadouts();
@@ -1281,7 +1281,7 @@ document.querySelectorAll('.preset-btn').forEach((btn) => {
     document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     atmosphere.applyPreset(btn.dataset.preset);
-    hydroState.tornadoStrength = atmosphere.state.tornadoStrength ?? 0.0;
+    hydroState.tornadoStrength = atmosphere.state.tornadoStrength;
     atmosphere.setVortexAndTide(
       hydroState.tornadoX,
       hydroState.tornadoZ,
@@ -1597,5 +1597,18 @@ function animate(now) {
     fpsAccumTime = 0;
   }
 }
+
+window.simulationContext = {
+  atmosphere,
+  terrain,
+  fluidClusterParticles,
+  fleet,
+  hydroState,
+  terrainState,
+  sampleWaterSurfaceHeight,
+  formatMorphLabel,
+  formatTideLabel,
+  refreshControlReadouts,
+};
 
 rafId = requestAnimationFrame(animate);
