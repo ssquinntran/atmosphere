@@ -200,6 +200,7 @@ export const WEATHER_PRESETS = {
     skyColor: 0x3b5068,
   },
 };
+
 export class AtmosphereLayer {
   constructor(options = {}) {
     this.mapExtent = options.mapExtent ?? 1200; // [-600, 600] in X and Z
@@ -438,7 +439,7 @@ export class AtmosphereLayer {
   applyPreset(presetName) {
     const preset = WEATHER_PRESETS[presetName];
     if (!preset) return;
-    const genus = CLOUD_GENERA[preset.cloudGenus] ?? CLOUD_GENERA.cumulus;
+    const genus = CLOUD_GENERA[preset.cloudGenus];
     Object.assign(this.state, preset, {
       cloudGenusId: genus.id,
       shapeParams: [...genus.shapeParams],
