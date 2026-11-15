@@ -150,8 +150,103 @@ export const CLOUD_GENERA = {
   },
 };
 
+export const STORM_TYPES = {
+  none: {
+    id: 0,
+    name: 'Fair Weather (No Cyclone)',
+    description: 'Calm maritime trade winds with no active cyclonic vortex or squall front.',
+    cloudGenus: 'cumulus',
+    coverage: 0.65,
+    windSpeed: 14,
+    rainIntensity: 0.0,
+    tornadoStrength: 0.0,
+    hurricaneStrength: 0.0,
+    sunElevationDeg: 32,
+    sunColor: 0xfff5e0,
+    sunIntensity: 3.6,
+    skyColor: 0x4f86c6,
+  },
+  waterspout: {
+    id: 1,
+    name: 'Maritime Waterspout (Rankine Tube)',
+    description: 'Slender translucent columnar Rankine vortex tube connecting cumulus base to a sea-spray ring.',
+    cloudGenus: 'cumulonimbus',
+    coverage: 0.76,
+    windSpeed: 22,
+    rainIntensity: 0.48,
+    tornadoStrength: 0.72,
+    hurricaneStrength: 0.0,
+    sunElevationDeg: 24,
+    sunColor: 0xffe2b8,
+    sunIntensity: 3.0,
+    skyColor: 0x43668a,
+  },
+  supercellTornado: {
+    id: 2,
+    name: 'EF5 Supercell Wedge Tornado',
+    description: 'Massive wedge-shaped mesocyclone Rankine vortex with rotating wall cloud, internal lightning, and debris suction.',
+    cloudGenus: 'cumulonimbus',
+    coverage: 0.88,
+    windSpeed: 30,
+    rainIntensity: 0.92,
+    tornadoStrength: 0.95,
+    hurricaneStrength: 0.0,
+    sunElevationDeg: 15,
+    sunColor: 0xffc994,
+    sunIntensity: 2.5,
+    skyColor: 0x35485e,
+  },
+  hurricane: {
+    id: 3,
+    name: 'Category 5 Hurricane (Eyewall + Spiral Bands)',
+    description: 'Synoptic tropical cyclone with a calm clear low-pressure eye, towering stadium eyewall, 4 spiral rainbands, and storm surge.',
+    cloudGenus: 'cumulonimbus',
+    coverage: 0.94,
+    windSpeed: 38,
+    rainIntensity: 0.96,
+    tornadoStrength: 0.0,
+    hurricaneStrength: 0.95,
+    sunElevationDeg: 18,
+    sunColor: 0xffd7b0,
+    sunIntensity: 2.4,
+    skyColor: 0x2d4359,
+  },
+  derecho: {
+    id: 4,
+    name: 'Derecho Squall Line (Arcus Shelf Cloud)',
+    description: 'Bowed linear convective squall front with a low turbulent arcus roll cloud, 36 m/s straight-line gale winds, and sheet lightning.',
+    cloudGenus: 'cumulonimbus',
+    coverage: 0.86,
+    windSpeed: 36,
+    rainIntensity: 0.88,
+    tornadoStrength: 0.0,
+    hurricaneStrength: 0.82,
+    sunElevationDeg: 14,
+    sunColor: 0xffbe85,
+    sunIntensity: 2.4,
+    skyColor: 0x314559,
+  },
+  norEaster: {
+    id: 5,
+    name: "Nor'easter Bomb Cyclone (Comma-Head)",
+    description: 'Deep baroclinic comma-head cyclone with dense nimbostratus gale bands, silver-slate polar lighting, and freezing sea spray.',
+    cloudGenus: 'nimbostratus',
+    coverage: 0.92,
+    windSpeed: 33,
+    rainIntensity: 0.86,
+    tornadoStrength: 0.35,
+    hurricaneStrength: 0.88,
+    sunElevationDeg: 12,
+    sunColor: 0xdbeafe,
+    sunIntensity: 2.3,
+    skyColor: 0x2c4257,
+  },
+};
+
 export const WEATHER_PRESETS = {
   tradeWinds: {
+    stormType: 'none',
+    stormTypeId: 0,
     cloudGenus: 'cumulus',
     coverage: 0.65,
     baseAltitude: 92,
@@ -163,11 +258,14 @@ export const WEATHER_PRESETS = {
     densityMultiplier: 1.68,
     rainIntensity: 0.0,
     tornadoStrength: 0.0,
+    hurricaneStrength: 0.0,
     sunColor: 0xfff5e0,
     sunIntensity: 3.6,
     skyColor: 0x4f86c6,
   },
   clearPatrol: {
+    stormType: 'none',
+    stormTypeId: 0,
     cloudGenus: 'cirrus',
     coverage: 0.54,
     baseAltitude: 230,
@@ -179,11 +277,14 @@ export const WEATHER_PRESETS = {
     densityMultiplier: 1.55,
     rainIntensity: 0.0,
     tornadoStrength: 0.0,
+    hurricaneStrength: 0.0,
     sunColor: 0xfff9ed,
     sunIntensity: 3.8,
     skyColor: 0x5692d6,
   },
   squall: {
+    stormType: 'supercellTornado',
+    stormTypeId: 2,
     cloudGenus: 'cumulonimbus',
     coverage: 0.86,
     baseAltitude: 68,
@@ -195,9 +296,29 @@ export const WEATHER_PRESETS = {
     densityMultiplier: 1.92,
     rainIntensity: 0.92,
     tornadoStrength: 0.85,
+    hurricaneStrength: 0.0,
     sunColor: 0xffc994,
     sunIntensity: 2.6,
     skyColor: 0x3b5068,
+  },
+  hurricane: {
+    stormType: 'hurricane',
+    stormTypeId: 3,
+    cloudGenus: 'cumulonimbus',
+    coverage: 0.94,
+    baseAltitude: 64,
+    slabThickness: 305,
+    sunElevationDeg: 18,
+    sunAzimuthDeg: 48,
+    windSpeed: 38,
+    extinction: 0.115,
+    densityMultiplier: 1.98,
+    rainIntensity: 0.96,
+    tornadoStrength: 0.0,
+    hurricaneStrength: 0.95,
+    sunColor: 0xffd7b0,
+    sunIntensity: 2.4,
+    skyColor: 0x2d4359,
   },
 };
 
@@ -217,6 +338,9 @@ export class AtmosphereLayer {
       tornadoX: 0.0,
       tornadoZ: 45.0,
       tornadoStrength: 0.0,
+      hurricaneStrength: 0.0,
+      stormType: 'none',
+      stormTypeId: 0,
       waterLevel: 0.0,
     };
 
@@ -391,10 +515,39 @@ export class AtmosphereLayer {
     this.state.originOffsetX = offsetX;
     this.state.originOffsetZ = offsetZ;
     if (this.material) {
-      this.material.uniforms.uWorldOriginOffset.value.set(offsetX, offsetZ, 0.0, 0.0);
+      this.material.uniforms.uWorldOriginOffset.value.set(
+        offsetX,
+        offsetZ,
+        this.state.stormTypeId,
+        this.state.hurricaneStrength
+      );
     }
   }
 
+  setStormType(stormKey) {
+    const storm = STORM_TYPES[stormKey];
+    if (!storm) return;
+    const genus = CLOUD_GENERA[storm.cloudGenus];
+    this.state.stormType = stormKey;
+    this.state.stormTypeId = storm.id;
+    this.state.cloudGenus = storm.cloudGenus;
+    this.state.cloudGenusId = genus.id;
+    this.state.coverage = storm.coverage;
+    this.state.baseAltitude = genus.baseAltitude;
+    this.state.slabThickness = genus.slabThickness;
+    this.state.extinction = genus.extinction;
+    this.state.densityMultiplier = genus.densityMultiplier;
+    this.state.rainIntensity = storm.rainIntensity;
+    this.state.tornadoStrength = storm.tornadoStrength;
+    this.state.hurricaneStrength = storm.hurricaneStrength;
+    this.state.windSpeed = storm.windSpeed;
+    this.state.sunElevationDeg = storm.sunElevationDeg;
+    this.state.sunColor = storm.sunColor;
+    this.state.sunIntensity = storm.sunIntensity;
+    this.state.skyColor = storm.skyColor;
+    this.state.shapeParams = [...genus.shapeParams];
+    this._syncBoundsAndLighting();
+  }
   setSceneDepthTexture(depthTexture) {
     if (this.material) {
       this.material.uniforms.uSceneDepth.value = depthTexture;
@@ -529,8 +682,8 @@ export class AtmosphereLayer {
     this.material.uniforms.uWorldOriginOffset.value.set(
       this.state.originOffsetX,
       this.state.originOffsetZ,
-      0.0,
-      0.0
+      this.state.stormTypeId,
+      this.state.hurricaneStrength
     );
   }
 
