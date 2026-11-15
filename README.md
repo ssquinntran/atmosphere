@@ -37,34 +37,38 @@ A drop-in, zero-allocation **WebGL2 / Three.js Volumetric Cloud, Cyclone Vortex,
 
 ### 1. Graphviz Pipeline Diagram (`digraph AtmosphereEngine`)
 
-```dot
-digraph AtmosphereEngine {
-  rankdir=LR;
-  node [shape=box, style="rounded,filled", fillcolor="#131c2e", fontcolor="#f0f6fc", color="#38bdf8", fontname="Inter"];
-  edge [color="#94a3b8", fontcolor="#cbd5e1", fontname="Inter", fontsize=10];
+```mermaid
+flowchart LR
+    classDef default fill:#131c2e,stroke:#38bdf8,stroke-width:1.5px,color:#f0f6fc,rx:8,ry:8
+    linkStyle default stroke:#94a3b8,stroke-width:1.5px,color:#cbd5e1
 
-  subgraph cluster_boot {
-    label="1. Boot & Pre-Bake"; style="rounded,dashed"; color="#38bdf8"; fontcolor="#38bdf8";
-    Baker [label="CloudNoiseBaker\n64³ Macro + 32³ Detail\nTypedArray.set Row Copy"];
-    TopoDSU [label="analyzeTerrainTopologyUnionFind\n56×56 Grid (3,136 cells)\nZero-Alloc _topoDsu Buffers"];
-  }
-  subgraph cluster_cpu {
-    label="2. Per-Frame CPU Physics (Zero Heap Alloc)"; style="rounded,dashed"; color="#818cf8"; fontcolor="#818cf8";
-    Grid [label="SpatialHashGrid3D\nO(N) 20m 3D Cells\n3×3×3 Neighbor Scan"];
-    DSU [label="DisjointSetUnion (512 parcels)\nO(N α(N)) Coalescence +\n0.08 Viscous Velocity Blend"];
-    ASV [label="6-DOF Saronic ASV Fleet\nBuoyancy + Roll/Pitch"];
-    Grid -> DSU -> ASV;
-  }
-  subgraph cluster_gpu {
-    label="3. Half-Res GPU Volumetric Pass"; style="rounded,dashed"; color="#34d399"; fontcolor="#34d399";
-    Frag [label="atmosphere.frag.js (0.5x FBO)\nRankine Vortex + Hurricane\n+ Sheet Lightning + Fog"];
-    Comp [label="Fullscreen Bilinear Composite\nbaseCol*(1-alpha) + cloudCol"];
-    Frag -> Comp;
-  }
-  Baker -> Frag [label="uMacroNoise / uDetailNoise"];
-  TopoDSU -> ASV [label="4 Isl / 1 Sea"];
-  DSU -> Comp [label="aClusterSize Glow"];
-}
+    subgraph cluster_boot ["1. Boot & Pre-Bake"]
+        direction TB
+        Baker("<b>CloudNoiseBaker</b><br/>64³ Macro + 32³ Detail<br/>TypedArray.set Row Copy")
+        TopoDSU("<b>analyzeTerrainTopologyUnionFind</b><br/>56×56 Grid (3,136 cells)<br/>Zero-Alloc _topoDsu Buffers")
+    end
+    style cluster_boot fill:transparent,stroke:#38bdf8,stroke-width:1.5px,stroke-dasharray: 5 5,color:#38bdf8
+
+    subgraph cluster_cpu ["2. Per-Frame CPU Physics (Zero Heap Alloc)"]
+        direction LR
+        Grid("<b>SpatialHashGrid3D</b><br/>O(N) 20m 3D Cells<br/>3×3×3 Neighbor Scan")
+        DSU("<b>DisjointSetUnion (512 parcels)</b><br/>O(N α(N)) Coalescence +<br/>0.08 Viscous Velocity Blend")
+        ASV("<b>6-DOF Saronic ASV Fleet</b><br/>Buoyancy + Roll/Pitch")
+        Grid --> DSU --> ASV
+    end
+    style cluster_cpu fill:transparent,stroke:#818cf8,stroke-width:1.5px,stroke-dasharray: 5 5,color:#818cf8
+
+    subgraph cluster_gpu ["3. Half-Res GPU Volumetric Pass"]
+        direction LR
+        Frag("<b>atmosphere.frag.js (0.5x FBO)</b><br/>Rankine Vortex + Hurricane<br/>+ Sheet Lightning + Fog")
+        Comp("<b>Fullscreen Bilinear Composite</b><br/>baseCol*(1-alpha) + cloudCol")
+        Frag --> Comp
+    end
+    style cluster_gpu fill:transparent,stroke:#34d399,stroke-width:1.5px,stroke-dasharray: 5 5,color:#34d399
+
+    Baker -->|"uMacroNoise / uDetailNoise"| Frag
+    TopoDSU -->|"4 Isl / 1 Sea"| ASV
+    DSU -->|"aClusterSize Glow"| Comp
 ```
 
 ### 2. Entity-Relationship Diagram (ERD)
