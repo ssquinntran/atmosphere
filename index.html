@@ -219,6 +219,7 @@
       padding-top: 8px;
     }
   </style>
+
   <script type="importmap">
     {
       "imports": {
@@ -366,6 +367,16 @@
       </div>
 
       <div class="slider-row">
+        <div class="slider-label"><span>Lightning Bolts &amp; Flash</span><span class="val" id="val-lightning">0%</span></div>
+        <input type="range" id="ctrl-lightning" min="0.00" max="1.00" step="0.02" value="0.00" />
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-label"><span>Atmospheric Fog &amp; Haze</span><span class="val" id="val-fog">22%</span></div>
+        <input type="range" id="ctrl-fog" min="0.00" max="1.00" step="0.02" value="0.22" />
+      </div>
+
+      <div class="slider-row">
         <div class="slider-label"><span>Cloud Base Altitude</span><span class="val" id="val-base">92 m</span></div>
         <input type="range" id="ctrl-base" min="45" max="260" step="1" value="92" />
       </div>
@@ -381,8 +392,8 @@
       </div>
 
       <div class="slider-row">
-        <div class="slider-label"><span>Raymarch Steps</span><span class="val" id="val-steps">48</span></div>
-        <input type="range" id="ctrl-steps" min="20" max="72" step="4" value="48" />
+        <div class="slider-label"><span>Raymarch Steps</span><span class="val" id="val-steps">36</span></div>
+        <input type="range" id="ctrl-steps" min="20" max="72" step="4" value="36" />
       </div>
     </div>
 
