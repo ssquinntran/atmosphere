@@ -95,6 +95,8 @@ export function setupMockBrowserEnvironment() {
   createMockElement('ctrl-coverage', 'INPUT');
   createMockElement('ctrl-density', 'INPUT');
   createMockElement('ctrl-rain', 'INPUT');
+  createMockElement('ctrl-lightning', 'INPUT');
+  createMockElement('ctrl-fog', 'INPUT');
   createMockElement('ctrl-base', 'INPUT');
   createMockElement('ctrl-sun', 'INPUT');
   createMockElement('ctrl-wind', 'INPUT');
@@ -112,6 +114,8 @@ export function setupMockBrowserEnvironment() {
   createMockElement('val-coverage', 'SPAN');
   createMockElement('val-density', 'SPAN');
   createMockElement('val-rain', 'SPAN');
+  createMockElement('val-lightning', 'SPAN');
+  createMockElement('val-fog', 'SPAN');
   createMockElement('val-base', 'SPAN');
   createMockElement('val-sun', 'SPAN');
   createMockElement('val-wind', 'SPAN');
@@ -749,6 +753,8 @@ async function runAllSuites() {
       ['ctrl-coverage', '0.78'],
       ['ctrl-density', '2.20'],
       ['ctrl-rain', '0.75'],
+      ['ctrl-lightning', '0.85'],
+      ['ctrl-fog', '0.60'],
       ['ctrl-base', '110'],
       ['ctrl-sun', '42'],
       ['ctrl-wind', '24'],
@@ -798,7 +804,6 @@ async function runAllSuites() {
   });
 
   // -------------------------------------------------------------------------
-  // -------------------------------------------------------------------------
   // SUITE 5: Front-End Unit Tests (HTML Markup Contract, Formatters & UI State)
   // -------------------------------------------------------------------------
   await runTest('Front-End Unit: index.html Markup & DOM Schema Contract', 'Validates importmap, canvas, 10 WMO genus options, 14 sliders & telemetry badges', () => {
@@ -838,6 +843,8 @@ async function runAllSuites() {
       ['ctrl-coverage', 'val-coverage'],
       ['ctrl-density', 'val-density'],
       ['ctrl-rain', 'val-rain'],
+      ['ctrl-lightning', 'val-lightning'],
+      ['ctrl-fog', 'val-fog'],
       ['ctrl-base', 'val-base'],
       ['ctrl-sun', 'val-sun'],
       ['ctrl-wind', 'val-wind'],
