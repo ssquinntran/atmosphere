@@ -194,3 +194,5 @@ npm test
 
 - **Mouse / Trackpad:** `Left-drag` to orbit · `Shift + Left-drag` or `Right-drag` to pan · `Scroll` / pinch to zoom
 - **Keyboard:** `WASD` / `Arrow keys` to fly (`Shift` for 2× speed) · `E` / `+` zoom in · `Q` / `-` zoom out · `R` reset camera · `1`–`4` shader debug modes
+- **Camera Perspective:** Choose `Free Orbit`, or ride along with `ASV-01 CORSAIR`, `ASV-02 CUTLASS`, or `ASV-03 SPYGLASS` (and click **Reset** / `R` to snap back to the deck view)
+- **Air Temperature (`-20°C` to `+45°C`):** Hot temperatures (`> 24°C`) amplify convective CAPE winds & storms; freezing temperatures (`<= 2°C`) transition precipitation to sleet/snow with mountain snowline & sea-ice (and turning it all the way down to `-20°C` unlocks a North Pole & Santa's Sleigh Easter egg with its own flying camera view)
