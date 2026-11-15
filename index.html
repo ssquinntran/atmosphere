@@ -109,6 +109,19 @@
     </div>
 
     <div>
+      <div class="section-title">Camera Perspective</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <select id="ctrl-camera-view" class="debug-select" aria-label="Camera Perspective" style="flex:1;">
+          <option value="free" selected>Free Orbit (Overview)</option>
+          <option value="boat-0">ASV-01 CORSAIR (Deck View)</option>
+          <option value="boat-1">ASV-02 CUTLASS (Deck View)</option>
+          <option value="boat-2">ASV-03 SPYGLASS (Deck View)</option>
+        </select>
+        <button id="btn-reset-camera" class="btn" style="padding:6px 10px;white-space:nowrap;">Reset</button>
+      </div>
+    </div>
+
+    <div>
       <div class="section-title">Shader Debug View (Keys 1–4)</div>
       <select id="ctrl-debug" class="debug-select" aria-label="Shader Debug View">
         <option value="0" selected>1: Final Composite (Lit Clouds + Rain)</option>
