@@ -1,0 +1,11 @@
+{
+  "name": "atmosphere",
+  "version": "1.0.0",
+  "description": "Volumetric Atmosphere, Vortex Hydrodynamics & Particle Physics Layer (WebGL2 / Three.js)",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "dev": "python3 -m http.server 8080",
+    "test": "node --no-warnings --experimental-loader ./tests/three-mock-loader.mjs ./tests/run-tests.js"
+  }
+}
