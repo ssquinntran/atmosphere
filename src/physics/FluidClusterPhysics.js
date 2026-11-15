@@ -80,12 +80,22 @@ export class SpatialHashGrid3D {
     this.invCellSize = 1.0 / cellSize;
     this.tableSize = tableSize; // Power of 2 for fast bitwise modulo
     this.tableMask = tableSize - 1;
-    this.head = new Int32Array(tableSize);
+    this.head = new Int32Array(tableSize).fill(-1);
     this.next = new Int32Array(particleCapacity);
+    // Cache integer cell coordinates per particle to avoid redundant Math.floor in neighbor pass
+    this.cellX = new Int32Array(particleCapacity);
+    this.cellY = new Int32Array(particleCapacity);
+    this.cellZ = new Int32Array(particleCapacity);
+    // Track only occupied buckets for O(K) sparse clear instead of O(tableSize) full fill
+    this.dirtyBuckets = new Int32Array(particleCapacity);
+    this.dirtyCount = 0;
   }
 
   clear() {
-    this.head.fill(-1);
+    for (let i = 0; i < this.dirtyCount; i++) {
+      this.head[this.dirtyBuckets[i]] = -1;
+    }
+    this.dirtyCount = 0;
   }
 
   _hashCell(cx, cy, cz) {
@@ -98,7 +108,13 @@ export class SpatialHashGrid3D {
     const cx = Math.floor(x * this.invCellSize);
     const cy = Math.floor(y * this.invCellSize);
     const cz = Math.floor(z * this.invCellSize);
+    this.cellX[particleIndex] = cx;
+    this.cellY[particleIndex] = cy;
+    this.cellZ[particleIndex] = cz;
     const bucket = this._hashCell(cx, cy, cz);
+    if (this.head[bucket] === -1) {
+      this.dirtyBuckets[this.dirtyCount++] = bucket;
+    }
     this.next[particleIndex] = this.head[bucket];
     this.head[bucket] = particleIndex;
   }
@@ -109,7 +125,6 @@ export class SpatialHashGrid3D {
    */
   clusterNeighbors(positions, velocities, count, radius, dsu) {
     const r2 = radius * radius;
-    const invCS = this.invCellSize;
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
@@ -117,9 +132,9 @@ export class SpatialHashGrid3D {
       const py = positions[i3 + 1];
       const pz = positions[i3 + 2];
 
-      const cx = Math.floor(px * invCS);
-      const cy = Math.floor(py * invCS);
-      const cz = Math.floor(pz * invCS);
+      const cx = this.cellX[i];
+      const cy = this.cellY[i];
+      const cz = this.cellZ[i];
 
       // Search 3x3x3 neighborhood cells
       for (let dz = -1; dz <= 1; dz++) {
@@ -219,7 +234,7 @@ export function analyzeTerrainTopologyUnionFind(heights, gridRes, waterLevel) {
  * - O(N) SpatialHashGrid3D + O(N α(N)) DisjointSetUnion cluster detection
  */
 export class LagrangianVortexParticleSystem {
-  constructor(count = 1100) {
+  constructor(count = 512) {
     this.count = count;
     this.positions = new Float32Array(count * 3);
     this.velocities = new Float32Array(count * 3);
@@ -227,7 +242,7 @@ export class LagrangianVortexParticleSystem {
     this.phases = new Float32Array(count); // 0 = surface foam/spray, 1 = airborne vortex parcel
 
     this.dsu = new DisjointSetUnion(count);
-    this.spatialGrid = new SpatialHashGrid3D(count, 20.0, 4096);
+    this.spatialGrid = new SpatialHashGrid3D(count, 20.0, 1024);
 
     this.activeClusters = count;
     this.largestCluster = 1;
@@ -260,6 +275,7 @@ export class LagrangianVortexParticleSystem {
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           float dist = max(-mvPosition.z, 10.0);
           vDistFade = 1.0 - smoothstep(280.0, 680.0, dist);
+
           // Coalesced Union-Find clusters render larger and brighter
           float basePointSize = mix(4.2, 10.5, vClusterFactor) * mix(1.0, 1.35, aPhase);
           gl_PointSize = clamp(basePointSize * (240.0 / dist), 1.5, 16.0);
@@ -379,27 +395,30 @@ export class LagrangianVortexParticleSystem {
       if (tornadoStrength > 0.01) {
         const dxT = px - tornadoCenterXZ.x;
         const dzT = pz - tornadoCenterXZ.y;
-        const rT = Math.sqrt(dxT * dxT + dzT * dzT) + 0.1;
-        const coreRadius = 26.0 + (Math.max(0.0, py - waterLevel) / Math.max(cloudBaseY, 80.0)) * 32.0;
+        const r2T = dxT * dxT + dzT * dzT;
 
-        if (rT < 210.0) {
+        if (r2T < 44100.0) {
+          const rT = Math.sqrt(r2T) + 0.1;
+          const coreRadius = 26.0 + (Math.max(0.0, py - waterLevel) / Math.max(cloudBaseY, 80.0)) * 32.0;
           // Rankine tangential velocity: linear inside core (r < R), 1/r decay outside core
           const rankineSwirl =
             rT < coreRadius
               ? (rT / coreRadius)
               : (coreRadius / rT);
           const swirlSpeed = 115.0 * tornadoStrength * rankineSwirl;
-          const tangX = -dzT / rT;
-          const tangZ = dxT / rT;
+          const invRT = 1.0 / rT;
+          const tangX = -dzT * invRT;
+          const tangZ = dxT * invRT;
 
           // Strong inward radial suction near sea surface; slight outward flare near cloud top
           const heightFrac = Math.min(1.0, Math.max(0.0, (py - waterLevel) / Math.max(cloudBaseY, 80.0)));
           const suctionSpeed = (1.0 - heightFrac * 1.15) * 58.0 * tornadoStrength * Math.exp(-rT / 95.0);
-          const radX = -dxT / rT;
-          const radZ = -dzT / rT;
+          const radX = -dxT * invRT;
+          const radZ = -dzT * invRT;
 
           // Intense helical updraft inside the funnel wall
-          const wallProximity = Math.exp(-Math.pow((rT - coreRadius * 0.75) / (coreRadius * 0.85), 2.0));
+          const wallDelta = (rT - coreRadius * 0.75) / (coreRadius * 0.85);
+          const wallProximity = Math.exp(-(wallDelta * wallDelta));
           const updraft = 82.0 * tornadoStrength * wallProximity;
 
           airVx += tangX * swirlSpeed + radX * suctionSpeed;
@@ -413,20 +432,23 @@ export class LagrangianVortexParticleSystem {
       if (hurricaneStrength > 0.01) {
         const dxH = px - tornadoCenterXZ.x;
         const dzH = pz - tornadoCenterXZ.y;
-        const rH = Math.sqrt(dxH * dxH + dzH * dzH) + 0.1;
+        const r2H = dxH * dxH + dzH * dzH;
         const eyeWallR = 88.0;
-        if (rH < 62.0) {
-          // Calm low-pressure Hurricane Eye with gentle downward subsidence
+        if (r2H < 3844.0) {
+          // Calm low-pressure Hurricane Eye (r < 62m) with gentle downward subsidence
           airVx *= 0.25;
           airVz *= 0.25;
           airVy -= 6.5 * hurricaneStrength;
-        } else if (rH < 420.0) {
+        } else if (r2H < 176400.0) {
           // Intense cyclonic eyewall tangential wind + inward convergence toward eyewall ring
-          const tangSpeed = 88.0 * hurricaneStrength * (eyeWallR / rH);
-          const eyeWallProximity = Math.exp(-Math.pow((rH - eyeWallR) / 36.0, 2.0));
-          const inflowSpeed = ((rH - eyeWallR) / rH) * 28.0 * hurricaneStrength;
-          airVx += (-dzH / rH) * tangSpeed - (dxH / rH) * inflowSpeed;
-          airVz += (dxH / rH) * tangSpeed - (dzH / rH) * inflowSpeed;
+          const rH = Math.sqrt(r2H) + 0.1;
+          const invRH = 1.0 / rH;
+          const tangSpeed = 88.0 * hurricaneStrength * (eyeWallR * invRH);
+          const ewDelta = (rH - eyeWallR) / 36.0;
+          const eyeWallProximity = Math.exp(-(ewDelta * ewDelta));
+          const inflowSpeed = ((rH - eyeWallR) * invRH) * 28.0 * hurricaneStrength;
+          airVx += (-dzH * invRH) * tangSpeed - (dxH * invRH) * inflowSpeed;
+          airVz += (dxH * invRH) * tangSpeed - (dzH * invRH) * inflowSpeed;
           airVy += 54.0 * hurricaneStrength * eyeWallProximity;
           inTornado = Math.max(inTornado, eyeWallProximity * hurricaneStrength);
         }
@@ -436,13 +458,15 @@ export class LagrangianVortexParticleSystem {
       if (whirlpoolStrength > 0.01 && py < waterLevel + 28.0) {
         const dxW = px - whirlpoolCenterXZ.x;
         const dzW = pz - whirlpoolCenterXZ.y;
-        const rW = Math.sqrt(dxW * dxW + dzW * dzW) + 0.1;
-        if (rW < 155.0) {
+        const r2W = dxW * dxW + dzW * dzW;
+        if (r2W < 24025.0) {
+          const rW = Math.sqrt(r2W) + 0.1;
+          const invRW = 1.0 / rW;
           const coreW = 28.0;
-          const swirlW = (rW < coreW ? rW / coreW : coreW / rW) * 68.0 * whirlpoolStrength;
+          const swirlW = (rW < coreW ? rW / coreW : coreW * invRW) * 68.0 * whirlpoolStrength;
           const inwardW = 34.0 * whirlpoolStrength * Math.exp(-rW / 75.0);
-          airVx += (-dzW / rW) * swirlW - (dxW / rW) * inwardW;
-          airVz += (dxW / rW) * swirlW - (dzW / rW) * inwardW;
+          airVx += (-dzW * invRW) * swirlW - (dxW * invRW) * inwardW;
+          airVz += (dxW * invRW) * swirlW - (dzW * invRW) * inwardW;
           airVy -= 18.0 * whirlpoolStrength * Math.exp(-rW / 35.0);
         }
       }
