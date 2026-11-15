@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AtmosphereLayer, CLOUD_GENERA } from './layers/AtmosphereLayer.js';
+import { AtmosphereLayer, CLOUD_GENERA, STORM_TYPES } from './layers/AtmosphereLayer.js';
 import {
   LagrangianVortexParticleSystem,
   analyzeTerrainTopologyUnionFind,
@@ -81,7 +81,8 @@ function getCrossGorgeZ(x) {
 
 // Extreme Maritime & Atmospheric Hydrodynamics State
 const hydroState = {
-  tornadoStrength: 0.0,   // [0..1] Rankine waterspout funnel connecting cloud base to sea surface
+  tornadoStrength: 0.0,   // [0..1] Rankine waterspout / EF5 wedge tornado funnel
+  hurricaneStrength: 0.0, // [0..1] Category 5 Hurricane eyewall, spiral bands & storm surge dome
   tornadoX: 0.0,
   tornadoZ: 65.0,
   tsunamiStrength: 0.0,   // [0..1] Soliton tsunami wave wall propagating through fjord channel
@@ -129,6 +130,17 @@ function sampleWaterSurfaceHeight(x, z, elapsed) {
     y += 2.6 * hydroState.tornadoStrength * ring;
   }
 
+  // 5. Category 5 Hurricane inverted-barometer storm surge dome + eyewall wave ring
+  if (hydroState.hurricaneStrength > 0.01) {
+    const dx = x - hydroState.tornadoX;
+    const dz = z - hydroState.tornadoZ;
+    const r2 = dx * dx + dz * dz;
+    const r = Math.sqrt(r2);
+    const surgeDome = Math.exp(-r2 / (2.0 * 115.0 * 115.0));
+    const eyewallChop = Math.sin(r * 0.11 - elapsed * 5.2) * Math.exp(-Math.pow((r - 88.0) / 38.0, 2.0));
+    y += (5.2 * surgeDome + 3.4 * eyewallChop) * hydroState.hurricaneStrength;
+  }
+
   return y;
 }
 
@@ -167,6 +179,7 @@ oceanMat.onBeforeCompile = (shader) => {
       varying vec3 vOceanWorldPos;
       varying float vFoamIntensity;
       uniform vec4 uWindAndTime;
+      uniform vec4 uWorldOriginOffset;
       uniform vec4 uHydroA;
       uniform vec4 uHydroB;
       uniform float uTornadoStrength;
@@ -210,6 +223,19 @@ oceanMat.onBeforeCompile = (shader) => {
           float sprayRing = exp(-pow((rT - 24.0) / 14.0, 2.0));
           h += 2.6 * uTornadoStrength * sprayRing;
           outFoam += uTornadoStrength * exp(-rT / 48.0) * 0.9;
+        }
+
+        // Category 5 Hurricane storm surge dome & eyewall wave ring
+        float hurricaneStr = uWorldOriginOffset.w;
+        if (hurricaneStr > 0.01) {
+          vec2 dH = xz - uHydroB.zw;
+          float r2H = dot(dH, dH);
+          float rH = sqrt(r2H);
+          float surgeDome = exp(-r2H / (2.0 * 115.0 * 115.0));
+          float eyewallRing = exp(-pow((rH - 88.0) / 38.0, 2.0));
+          float eyewallChop = sin(rH * 0.11 - t * 5.2) * eyewallRing;
+          h += (5.2 * surgeDome + 3.4 * eyewallChop) * hurricaneStr;
+          outFoam += hurricaneStr * eyewallRing * 0.85;
         }
 
         return h;
@@ -397,6 +423,7 @@ function createMorphableTerrain() {
   }
 
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.84,
@@ -1183,8 +1210,10 @@ function syncSceneLighting() {
 syncSceneLighting();
 
 // Wire up HUD controls
+const ctrlStorm = document.getElementById('ctrl-storm');
 const ctrlGenus = document.getElementById('ctrl-genus');
 const ctrlTornado = document.getElementById('ctrl-tornado');
+const ctrlHurricane = document.getElementById('ctrl-hurricane');
 const ctrlTsunami = document.getElementById('ctrl-tsunami');
 const ctrlWhirlpool = document.getElementById('ctrl-whirlpool');
 const ctrlTide = document.getElementById('ctrl-tide');
@@ -1226,8 +1255,10 @@ function formatTideLabel(lvl) {
 }
 
 function refreshControlReadouts() {
+  if (ctrlStorm) ctrlStorm.value = atmosphere.state.stormType;
   ctrlGenus.value = atmosphere.state.cloudGenus;
   ctrlTornado.value = hydroState.tornadoStrength;
+  if (ctrlHurricane) ctrlHurricane.value = hydroState.hurricaneStrength;
   ctrlTsunami.value = hydroState.tsunamiStrength;
   ctrlWhirlpool.value = hydroState.whirlpoolStrength;
   ctrlTide.value = hydroState.waterLevel;
@@ -1244,6 +1275,10 @@ function refreshControlReadouts() {
   ctrlDebug.value = String(atmosphere.state.debugMode);
 
   document.getElementById('val-tornado').textContent = `${Math.round(hydroState.tornadoStrength * 100)}%`;
+  const elValHurr = document.getElementById('val-hurricane');
+  if (elValHurr) {
+    elValHurr.textContent = `${Math.round(hydroState.hurricaneStrength * 100)}%`;
+  }
   document.getElementById('val-tsunami').textContent = `${Math.round(hydroState.tsunamiStrength * 100)}%`;
   document.getElementById('val-whirlpool').textContent = `${Math.round(hydroState.whirlpoolStrength * 100)}%`;
   document.getElementById('val-tide').textContent = formatTideLabel(hydroState.waterLevel);
@@ -1266,8 +1301,13 @@ function refreshControlReadouts() {
   }
 
   const genusMeta = CLOUD_GENERA[atmosphere.state.cloudGenus];
+  const stormMeta = STORM_TYPES[atmosphere.state.stormType];
   if (genusMeta && elGenusInfo) {
-    elGenusInfo.innerHTML = `<strong>${genusMeta.name} · ${genusMeta.etage}:</strong> ${genusMeta.description}`;
+    const stormBanner =
+      stormMeta && atmosphere.state.stormType !== 'none'
+        ? `<strong>[${stormMeta.name}]</strong> ${stormMeta.description}<br/>`
+        : '';
+    elGenusInfo.innerHTML = `${stormBanner}<strong>${genusMeta.name} · ${genusMeta.etage}:</strong> ${genusMeta.description}`;
   }
 
   if (elDebugCaption) {
@@ -1282,6 +1322,7 @@ document.querySelectorAll('.preset-btn').forEach((btn) => {
     btn.classList.add('active');
     atmosphere.applyPreset(btn.dataset.preset);
     hydroState.tornadoStrength = atmosphere.state.tornadoStrength;
+    hydroState.hurricaneStrength = atmosphere.state.hurricaneStrength;
     atmosphere.setVortexAndTide(
       hydroState.tornadoX,
       hydroState.tornadoZ,
@@ -1292,6 +1333,23 @@ document.querySelectorAll('.preset-btn').forEach((btn) => {
     refreshControlReadouts();
   });
 });
+
+if (ctrlStorm) {
+  ctrlStorm.addEventListener('change', (e) => {
+    document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
+    atmosphere.setStormType(e.target.value);
+    hydroState.tornadoStrength = atmosphere.state.tornadoStrength;
+    hydroState.hurricaneStrength = atmosphere.state.hurricaneStrength;
+    atmosphere.setVortexAndTide(
+      hydroState.tornadoX,
+      hydroState.tornadoZ,
+      hydroState.tornadoStrength,
+      hydroState.waterLevel
+    );
+    syncSceneLighting();
+    refreshControlReadouts();
+  });
+}
 
 ctrlGenus.addEventListener('change', (e) => {
   document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
@@ -1311,6 +1369,19 @@ ctrlTornado.addEventListener('input', (e) => {
   syncSceneLighting();
   refreshControlReadouts();
 });
+
+if (ctrlHurricane) {
+  ctrlHurricane.addEventListener('input', (e) => {
+    hydroState.hurricaneStrength = parseFloat(e.target.value);
+    atmosphere.setEnvironment({
+      hurricaneStrength: hydroState.hurricaneStrength,
+      stormType: hydroState.hurricaneStrength > 0.05 ? 'hurricane' : 'none',
+      stormTypeId: hydroState.hurricaneStrength > 0.05 ? 3 : 0,
+    });
+    syncSceneLighting();
+    refreshControlReadouts();
+  });
+}
 
 ctrlTsunami.addEventListener('input', (e) => {
   hydroState.tsunamiStrength = parseFloat(e.target.value);
@@ -1545,6 +1616,7 @@ function animate(now) {
     windVecXZ,
     tornadoStrength: hydroState.tornadoStrength,
     tornadoCenterXZ: { x: hydroState.tornadoX, y: hydroState.tornadoZ },
+    hurricaneStrength: hydroState.hurricaneStrength,
     whirlpoolStrength: hydroState.whirlpoolStrength,
     whirlpoolCenterXZ: { x: hydroState.whirlpoolX, y: hydroState.whirlpoolZ },
     tsunamiStrength: hydroState.tsunamiStrength,
