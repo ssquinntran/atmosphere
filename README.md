@@ -1,22 +1,35 @@
 # Volumetric Atmosphere & Maritime Storm Engine (`AtmosphereLayer`)
 
-A drop-in, zero-allocation **WebGL2 / Three.js Volumetric Cloud, Cyclone Vortex, 3D Lightning, Fog & Maritime Hydrodynamics Engine**. Pairs single-pass GPU raymarching (`AtmosphereLayer`) with $O(N)$ **3D Spatial Hash Grid (`SpatialHashGrid3D`)** + $O(N \cdot \alpha(N))$ **Disjoint-Set Union-Find (`DisjointSetUnion`)** fluid-cluster and coastal-topology physics (`FluidClusterPhysics.js`).
+A drop-in, zero-allocation **WebGL2 / Three.js Volumetric Cloud, Cyclone Vortex, 3D Lightning, Fog & Maritime Hydrodynamics Engine**. Pairs single-pass GPU raymarching ([src/layers/AtmosphereLayer.js](src/layers/AtmosphereLayer.js)) with $O(N)$ **3D Spatial Hash Grid (`SpatialHashGrid3D`)** + $O(N \cdot \alpha(N))$ **Disjoint-Set Union-Find (`DisjointSetUnion`)** fluid-cluster and coastal-topology physics ([src/physics/FluidClusterPhysics.js](src/physics/FluidClusterPhysics.js)).
 
-![Live Tornado Waterspout & Autonomous USV](docs/screenshots/screenshot_tornado_squall.png)
+![Live EF5 Supercell Tornado Waterspout & Autonomous USV](screenshot_tornado_squall.png)
+
+---
+
+## Included Artifacts, Slideshows & Video Showcases in This Repository
+
+| Artifact / Deliverable | Format | Link in Repository |
+| :--- | :--- | :--- |
+| **10-Slide Executive Architecture Slideshow (Markdown)** | Markdown + Mermaid + Graphviz | [atmosphere_architecture_slideshow.md](atmosphere_architecture_slideshow.md) |
+| **10-Slide Interactive Architecture Presentation Deck** | Interactive HTML Deck | [atmosphere_slideshow_deck.html](atmosphere_slideshow_deck.html) |
+| **Engineering Walkthrough & Union-Find Appendix** | Markdown Documentation | [walkthrough.md](walkthrough.md) |
+| **10 Extreme Weather & Capability Scenario Videos** | Markdown Video Catalog | [extreme_weather_10_videos.md](extreme_weather_10_videos.md) |
+| **Interactive 10-Scenario Video Showcase Player** | Interactive HTML Video Player | [atmosphere_video_showcase.html](atmosphere_video_showcase.html) |
+| **Automated 10-Scenario WebGL2 Video Studio** | ES Module Recorder | [scenarios-recorder.js](scenarios-recorder.js) |
 
 ---
 
 ## Key Capabilities & Performance Highlights
 
-- **Single-Pass GPU Volumetric Raymarching (`src/layers/AtmosphereLayer.js`, `src/shaders/atmosphere.frag.js`):**
-  - Pre-baked $64 \times 64 \times 64$ macro and $32 \times 32 \times 32$ detail tileable 3D Perlin-Worley + Curl-Noise volume textures (`CloudNoiseBaker`) unpacked via native `TypedArray.set(subarray)` row copies (**~8.5× faster** than analytic shader noise).
+- **Single-Pass GPU Volumetric Raymarching ([src/layers/AtmosphereLayer.js](src/layers/AtmosphereLayer.js), [src/shaders/atmosphere.frag.js](src/shaders/atmosphere.frag.js)):**
+  - Pre-baked $64 \times 64 \times 64$ macro and $32 \times 32 \times 32$ detail tileable 3D Perlin-Worley + Curl-Noise volume textures ([src/noise/CloudNoiseBaker.js](src/noise/CloudNoiseBaker.js)) unpacked via native `TypedArray.set(subarray)` row copies (**~8.5× faster** than analytic shader noise).
   - Half-resolution ($0.5\times$) FBO volumetric target with blue-noise temporal jitter and single-pass hardware bilinear upsampling (**4× fewer fragments**).
   - **10 WMO Cloud Genera** (`cumulus`, `stratus`, `stratocumulus`, `altocumulus`, `altostratus`, `nimbostratus`, `cirrus`, `cirrocumulus`, `cirrostratus`, `cumulonimbus`) & **6 Storm Regimes** (`none`, `waterspout`, `supercellTornado`, `hurricane`, `derecho`, `norEaster`).
   - **Interactive Lightning & Fog Controls:** Real-time sliders for 3D branched GPU cloud-to-sea lightning bolts + volumetric sheet flash (`lightningIntensity` in `[0.0, 1.0]`) and Beer-Lambert atmospheric fog (`fogDensity` in `[0.0, 1.0]`).
-- **Zero-Allocation $O(N)$ 3D Spatial Hash + Union-Find Physics (`src/physics/FluidClusterPhysics.js`):**
+- **Zero-Allocation $O(N)$ 3D Spatial Hash + Union-Find Physics ([src/physics/FluidClusterPhysics.js](src/physics/FluidClusterPhysics.js)):**
   - **3D Spatial Hash Grid (`SpatialHashGrid3D`):** $O(N)$ broad-phase proximity detection in `20m` 3D grid cells using flat `Int32Array` buckets (`head`, `next`, `dirtyBuckets`).
   - **Disjoint-Set Union (`DisjointSetUnion`):** $O(N \cdot \alpha(N))$ path-compressed connected-component clustering for 512 3D sea-spray/vortex parcels and $56 \times 56$ (`3,136-cell`) coastal heightfield topology using reusable zero-allocation buffers.
-- **100.0% V8 Code Coverage:** **14 / 14** unit, front-end DOM, and live 4-phase experiment suites passing (**100.0% Line, 100.0% Function, 99.7% Branch Coverage**).
+- **100.0% V8 Code Coverage:** **14 / 14** unit, front-end DOM, and live 4-phase experiment suites passing (**100.0% Line, 100.0% Function, 99.7% Branch Coverage**) via [tests/run-tests.js](tests/run-tests.js) and [tests/frontend-tests.html](tests/frontend-tests.html).
 
 ---
 
@@ -104,7 +117,7 @@ sequenceDiagram
 
 ## Appendix: What Union-Find Does & Why Spatial Hash + Union-Find Instead of a Priority Queue
 
-We are **not** using a priority queue—instead, the simulation pairs a **3D Spatial Hash Grid (`SpatialHashGrid3D`)** for $O(N)$ broad-phase collision/proximity detection with **Disjoint-Set Union-Find (`DisjointSetUnion`)** for $O(N \cdot \alpha(N))$ connected-component clustering in `src/physics/FluidClusterPhysics.js`.
+We are **not** using a priority queue—instead, the simulation pairs a **3D Spatial Hash Grid (`SpatialHashGrid3D`)** for $O(N)$ broad-phase collision/proximity detection with **Disjoint-Set Union-Find (`DisjointSetUnion`)** for $O(N \cdot \alpha(N))$ connected-component clustering in [src/physics/FluidClusterPhysics.js](src/physics/FluidClusterPhysics.js).
 
 ### 1. What Union-Find Does in Your Simulation
 
@@ -140,20 +153,20 @@ If you ever want to add **vessel-to-vessel rigid-body collision avoidance** (whe
 
 ---
 
-## 10 Recorded Extreme Weather & Capability Scenario Videos (`videos/*.webm`)
+## 10 Recorded Extreme Weather & Capability Scenario Videos
 
 | # | Recorded Video File | Storm Regime | Cloud Genus / Pass | Highlighted Capability |
 | :-: | :--- | :--- | :--- | :--- |
-| **01** | `videos/scenario_01_ef5_supercell_tornado.webm` | `supercellTornado` | `cumulonimbus` | EF5 Rankine Wedge Tornado (`95%`) + 3D Branched Lightning (`95%`) |
-| **02** | `videos/scenario_02_cat5_hurricane_eyewall.webm` | `hurricane` | `cumulonimbus` | Category-5 Eyewall (`100%`) + 4 Spiral Rainbands + `40 m/s` Wind |
-| **03** | `videos/scenario_03_waterspout_whirlpool_dsu.webm` | `waterspout` | `cumulonimbus` | Waterspout (`92%`) + Whirlpool (`100%`) + 512 DSU Vortex Parcels |
-| **04** | `videos/scenario_04_derecho_arcus_tsunami.webm` | `derecho` | `cumulonimbus` | Bow-Echo Arcus Shelf Cloud + `100%` Tsunami Soliton Wave |
-| **05** | `videos/scenario_05_noreaster_bomb_cyclone.webm` | `norEaster` | `nimbostratus` | Baroclinic Comma-Head Cyclone + `+11.5m` King-Tide Canyon Surge |
-| **06** | `videos/scenario_06_dusk_lightning_barrage.webm` | `supercellTornado` | `cumulonimbus` | Sunset Supercell + `100%` Branched Lightning & Sheet Flash |
-| **07** | `videos/scenario_07_dense_advection_sea_fog.webm` | `none` | `stratus` | `100%` Beer-Lambert Advection Sea Fog + Low `55m` Stratus Deck |
-| **08** | `videos/scenario_08_golden_hour_archipelago.webm` | `none` | `cumulus` | 5-Island Archipelago DSU (`5I/1S`) + HG Silver-Lining Cumulus |
-| **09** | `videos/scenario_09_beer_lambert_transmittance.webm` | `supercellTornado` | `debugMode: 1` | Beer-Lambert Optical Transmittance $T = \exp(-\sigma_t s)$ Heatmap |
-| **10** | `videos/scenario_10_3d_noise_topographic_airflow.webm` | `hurricane` | `debugMode: 3` | $64^3$ 3D Perlin-Worley Noise Slice & Mountain Potential Flow |
+| **01** | [scenario_01_ef5_supercell_tornado.webm](scenario_01_ef5_supercell_tornado.webm) | `supercellTornado` | `cumulonimbus` | EF5 Rankine Wedge Tornado (`95%`) + 3D Branched Lightning (`95%`) |
+| **02** | [scenario_02_cat5_hurricane_eyewall.webm](scenario_02_cat5_hurricane_eyewall.webm) | `hurricane` | `cumulonimbus` | Category-5 Eyewall (`100%`) + 4 Spiral Rainbands + `40 m/s` Wind |
+| **03** | [scenario_03_waterspout_whirlpool_dsu.webm](scenario_03_waterspout_whirlpool_dsu.webm) | `waterspout` | `cumulonimbus` | Waterspout (`92%`) + Whirlpool (`100%`) + 512 DSU Vortex Parcels |
+| **04** | [scenario_04_derecho_arcus_tsunami.webm](scenario_04_derecho_arcus_tsunami.webm) | `derecho` | `cumulonimbus` | Bow-Echo Arcus Shelf Cloud + `100%` Tsunami Soliton Wave |
+| **05** | [scenario_05_noreaster_bomb_cyclone.webm](scenario_05_noreaster_bomb_cyclone.webm) | `norEaster` | `nimbostratus` | Baroclinic Comma-Head Cyclone + `+11.5m` King-Tide Canyon Surge |
+| **06** | [scenario_06_dusk_lightning_barrage.webm](scenario_06_dusk_lightning_barrage.webm) | `supercellTornado` | `cumulonimbus` | Sunset Supercell + `100%` Branched Lightning & Sheet Flash |
+| **07** | [scenario_07_dense_advection_sea_fog.webm](scenario_07_dense_advection_sea_fog.webm) | `none` | `stratus` | `100%` Beer-Lambert Advection Sea Fog + Low `55m` Stratus Deck |
+| **08** | [scenario_08_golden_hour_archipelago.webm](scenario_08_golden_hour_archipelago.webm) | `none` | `cumulus` | 5-Island Archipelago DSU (`5I/1S`) + HG Silver-Lining Cumulus |
+| **09** | [scenario_09_beer_lambert_transmittance.webm](scenario_09_beer_lambert_transmittance.webm) | `supercellTornado` | `debugMode: 1` | Beer-Lambert Optical Transmittance $T = \exp(-\sigma_t s)$ Heatmap |
+| **10** | [scenario_10_3d_noise_topographic_airflow.webm](scenario_10_3d_noise_topographic_airflow.webm) | `hurricane` | `debugMode: 3` | $64^3$ 3D Perlin-Worley Noise Slice & Mountain Potential Flow |
 
 ---
 
@@ -161,9 +174,9 @@ If you ever want to add **vessel-to-vessel rigid-body collision avoidance** (whe
 
 | Trade Winds & DSU Telemetry | GLSL Volumetric Raymarching |
 | :---: | :---: |
-| ![Trade Winds DSU Telemetry](docs/screenshots/screenshot_trade_winds_dsu.png) | ![GLSL Volumetric Shader](docs/screenshots/screenshot_glsl_shader.png) |
+| ![Trade Winds DSU Telemetry](screenshot_trade_winds_dsu.png) | ![GLSL Volumetric Shader](screenshot_glsl_shader.png) |
 | **Beer-Lambert Transmittance Debug** | **Live 4-Phase Experiment & Browser Unit Tests** |
-| ![Transmittance Debug](docs/screenshots/screenshot_transmittance_debug.png) | ![Live Experiment](docs/screenshots/screenshot_live_experiment.png) |
+| ![Transmittance Debug](screenshot_transmittance_debug.png) | ![Live Experiment](screenshot_live_experiment.png) |
 
 ---
 

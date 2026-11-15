@@ -14,212 +14,33 @@
       --text-muted: #94a3b8;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    html, body {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #070d14;
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-
-    #viewport {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      display: block;
-    }
-
-    .hud-header {
-      position: fixed;
-      top: 16px;
-      left: 16px;
-      background: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      backdrop-filter: blur(10px);
-      border-radius: 8px;
-      padding: 12px 16px;
-      pointer-events: none;
-      max-width: 375px;
-    }
-
-    .hud-header h1 {
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 4px;
-    }
-
-    .hud-header p {
-      font-size: 12px;
-      color: var(--text-muted);
-      line-height: 1.45;
-    }
-
-    .genus-badge {
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(110, 168, 224, 0.16);
-      font-size: 11px;
-      line-height: 1.4;
-      color: #cbd5e1;
-    }
-
-    .genus-badge strong {
-      color: var(--accent);
-      font-family: var(--mono);
-    }
-
-    .hud-controls {
-      position: fixed;
-      top: 16px;
-      right: 16px;
-      width: 335px;
-      background: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      backdrop-filter: blur(10px);
-      border-radius: 8px;
-      padding: 14px;
-      font-size: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      max-height: calc(100vh - 32px);
-      overflow-y: auto;
-    }
-
-    .section-title {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      margin-bottom: 5px;
-    }
-
-    .preset-row {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 6px;
-    }
-
-    button.preset-btn {
-      background: rgba(30, 41, 59, 0.7);
-      border: 1px solid var(--border-subtle);
-      color: var(--text-main);
-      padding: 6px 6px;
-      border-radius: 5px;
-      font-size: 11px;
-      cursor: pointer;
-      transition: all 0.15s ease;
-    }
-
-    button.preset-btn:hover {
-      border-color: var(--accent);
-    }
-
-    button.preset-btn.active {
-      background: var(--accent-soft);
-      border-color: var(--accent);
-      color: #fff;
-      font-weight: 600;
-    }
-
-    select.debug-select {
-      width: 100%;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid var(--border-subtle);
-      color: var(--text-main);
-      padding: 6px 8px;
-      border-radius: 5px;
-      font-size: 11px;
-      font-family: var(--mono);
-      cursor: pointer;
-      outline: none;
-    }
-
-    select.debug-select:hover,
-    select.debug-select:focus {
-      border-color: var(--accent);
-    }
-
-    .debug-caption {
-      margin-top: 5px;
-      font-size: 11px;
-      color: #94a3b8;
-      line-height: 1.35;
-      background: rgba(15, 23, 42, 0.55);
-      border-left: 2px solid var(--accent);
-      padding: 5px 8px;
-      border-radius: 0 4px 4px 0;
-    }
-
-    .control-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .slider-row {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .slider-label {
-      display: flex;
-      justify-content: space-between;
-      color: var(--text-main);
-    }
-
-    .slider-label span.val {
-      font-family: var(--mono);
-      color: var(--accent);
-    }
-
-    input[type="range"] {
-      width: 100%;
-      accent-color: var(--accent);
-      cursor: pointer;
-    }
-
-    .telemetry-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      background: rgba(7, 13, 20, 0.65);
-      border: 1px solid rgba(110, 168, 224, 0.14);
-      border-radius: 6px;
-      padding: 8px;
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-
-    .metric-label {
-      color: var(--text-muted);
-      font-size: 10px;
-    }
-
-    .metric-value {
-      color: #f8fafc;
-      font-weight: 600;
-      margin-top: 1px;
-    }
-
-    .hint {
-      font-size: 11px;
-      color: var(--text-muted);
-      border-top: 1px solid rgba(110, 168, 224, 0.14);
-      padding-top: 8px;
-    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #070d14; color: var(--text-main); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #viewport { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    .hud-header { position: fixed; top: 16px; left: 16px; background: var(--bg-panel); border: 1px solid var(--border-subtle); backdrop-filter: blur(10px); border-radius: 8px; padding: 12px 16px; pointer-events: none; max-width: 375px; }
+    .hud-header h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+    .hud-header p { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+    .genus-badge { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(110, 168, 224, 0.16); font-size: 11px; line-height: 1.4; color: #cbd5e1; }
+    .genus-badge strong { color: var(--accent); font-family: var(--mono); }
+    .hud-controls { position: fixed; top: 16px; right: 16px; width: 335px; background: var(--bg-panel); border: 1px solid var(--border-subtle); backdrop-filter: blur(10px); border-radius: 8px; padding: 14px; font-size: 12px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 32px); overflow-y: auto; }
+    .section-title { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 5px; }
+    .preset-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    button.preset-btn { background: rgba(30, 41, 59, 0.7); border: 1px solid var(--border-subtle); color: var(--text-main); padding: 6px; border-radius: 5px; font-size: 11px; cursor: pointer; transition: all 0.15s ease; }
+    button.preset-btn:hover { border-color: var(--accent); }
+    button.preset-btn.active { background: var(--accent-soft); border-color: var(--accent); color: #fff; font-weight: 600; }
+    select.debug-select { width: 100%; background: rgba(15, 23, 42, 0.9); border: 1px solid var(--border-subtle); color: var(--text-main); padding: 6px 8px; border-radius: 5px; font-size: 11px; font-family: var(--mono); cursor: pointer; outline: none; }
+    select.debug-select:hover, select.debug-select:focus { border-color: var(--accent); }
+    .debug-caption { margin-top: 5px; font-size: 11px; color: #94a3b8; line-height: 1.35; background: rgba(15, 23, 42, 0.55); border-left: 2px solid var(--accent); padding: 5px 8px; border-radius: 0 4px 4px 0; }
+    .control-group { display: flex; flex-direction: column; gap: 6px; }
+    .slider-row { display: flex; flex-direction: column; gap: 2px; }
+    .slider-label { display: flex; justify-content: space-between; color: var(--text-main); }
+    .slider-label span.val { font-family: var(--mono); color: var(--accent); }
+    input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+    .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: rgba(7, 13, 20, 0.65); border: 1px solid rgba(110, 168, 224, 0.14); border-radius: 6px; padding: 8px; font-family: var(--mono); font-size: 11px; }
+    .metric-label { color: var(--text-muted); font-size: 10px; }
+    .metric-value { color: #f8fafc; font-weight: 600; margin-top: 1px; }
+    .hint { font-size: 11px; color: var(--text-muted); border-top: 1px solid rgba(110, 168, 224, 0.14); padding-top: 8px; }
   </style>
-
   <script type="importmap">
     {
       "imports": {
@@ -234,9 +55,9 @@
 
   <div class="hud-header">
     <h1>Atmosphere Layer // WebGL2</h1>
-    <p>Volumetric clouds (10 WMO genera), Rankine tornado waterspout, vertex-displaced tsunami &amp; whirlpool hydrodynamics, Spatial-Hash + Union-Find particle physics, and Saronic ASV fleet.</p>
+    <p>Volumetric clouds (10 WMO genera), 6 storm regimes, 3D lightning, vertex-displaced tsunami &amp; whirlpool waves, Spatial-Hash + Union-Find physics, and Saronic ASV fleet.</p>
     <div class="genus-badge" id="genus-info">
-      <strong>Cumulus (Cu) · Low (90–260 m):</strong> Detached, dense cauliflower towers with crisp flat bases and sunlit domes.
+      <strong>Cumulus (Cu) · Low (90–260 m):</strong> Detached cauliflower towers with crisp flat bases and sunlit domes.
     </div>
   </div>
 
@@ -302,27 +123,22 @@
 
     <div class="control-group">
       <div class="section-title">Tornado, Hurricane, Tsunami, Whirlpool &amp; Tides</div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Tornado / Waterspout Vortex</span><span class="val" id="val-tornado">0%</span></div>
         <input type="range" id="ctrl-tornado" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Hurricane Eyewall &amp; Spiral Bands</span><span class="val" id="val-hurricane">0%</span></div>
         <input type="range" id="ctrl-hurricane" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Tsunami Soliton Wave</span><span class="val" id="val-tsunami">0%</span></div>
         <input type="range" id="ctrl-tsunami" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Whirlpool Maelstrom</span><span class="val" id="val-whirlpool">0%</span></div>
         <input type="range" id="ctrl-whirlpool" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Tidal Sea Level (In/Out)</span><span class="val" id="val-tide">0.0 m (Mean Tide)</span></div>
         <input type="range" id="ctrl-tide" min="-5.0" max="12.0" step="0.5" value="0.0" />
@@ -331,17 +147,14 @@
 
     <div class="control-group">
       <div class="section-title">Landform &amp; Canyon Morph</div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Islands → Canyon Mountains</span><span class="val" id="val-terrain-morph">65% (Fjord Canyon)</span></div>
         <input type="range" id="ctrl-terrain-morph" min="0.00" max="1.00" step="0.01" value="0.65" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Mountain Peak Height</span><span class="val" id="val-peak-height">245 m</span></div>
         <input type="range" id="ctrl-peak-height" min="60" max="360" step="5" value="245" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Canyon Gorge Carve</span><span class="val" id="val-canyon-depth">70%</span></div>
         <input type="range" id="ctrl-canyon-depth" min="0.00" max="1.00" step="0.02" value="0.70" />
@@ -349,48 +162,39 @@
     </div>
 
     <div class="control-group">
-      <div class="section-title">Atmosphere, Clarity &amp; Rain</div>
-
+      <div class="section-title">Atmosphere, Lightning, Fog &amp; Rain</div>
       <div class="slider-row">
         <div class="slider-label"><span>Cloud Coverage</span><span class="val" id="val-coverage">65%</span></div>
         <input type="range" id="ctrl-coverage" min="0.15" max="0.98" step="0.01" value="0.65" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Cloud Optical Clarity</span><span class="val" id="val-density">1.68×</span></div>
         <input type="range" id="ctrl-density" min="0.60" max="3.00" step="0.05" value="1.68" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Rain Intensity</span><span class="val" id="val-rain">0%</span></div>
         <input type="range" id="ctrl-rain" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Lightning Bolts &amp; Flash</span><span class="val" id="val-lightning">0%</span></div>
         <input type="range" id="ctrl-lightning" min="0.00" max="1.00" step="0.02" value="0.00" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Atmospheric Fog &amp; Haze</span><span class="val" id="val-fog">22%</span></div>
         <input type="range" id="ctrl-fog" min="0.00" max="1.00" step="0.02" value="0.22" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Cloud Base Altitude</span><span class="val" id="val-base">92 m</span></div>
         <input type="range" id="ctrl-base" min="45" max="260" step="1" value="92" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Sun Elevation</span><span class="val" id="val-sun">32°</span></div>
         <input type="range" id="ctrl-sun" min="4" max="75" step="1" value="32" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Wind Drift Speed</span><span class="val" id="val-wind">14 m/s</span></div>
         <input type="range" id="ctrl-wind" min="0" max="40" step="1" value="14" />
       </div>
-
       <div class="slider-row">
         <div class="slider-label"><span>Raymarch Steps</span><span class="val" id="val-steps">36</span></div>
         <input type="range" id="ctrl-steps" min="20" max="72" step="4" value="36" />
@@ -400,22 +204,10 @@
     <div>
       <div class="section-title">Live Frame &amp; Union-Find Telemetry</div>
       <div class="telemetry-grid">
-        <div>
-          <div class="metric-label">Frame Rate</div>
-          <div class="metric-value" id="stat-fps">-- FPS</div>
-        </div>
-        <div>
-          <div class="metric-label">Cloud GPU Pass</div>
-          <div class="metric-value" id="stat-gpu">-- ms</div>
-        </div>
-        <div>
-          <div class="metric-label">Union-Find Clusters</div>
-          <div class="metric-value" id="stat-clusters">-- (Max: --)</div>
-        </div>
-        <div>
-          <div class="metric-label">DSU Land / Water</div>
-          <div class="metric-value" id="stat-topology">-- Isl / -- Sea</div>
-        </div>
+        <div><div class="metric-label">Frame Rate</div><div class="metric-value" id="stat-fps">-- FPS</div></div>
+        <div><div class="metric-label">Cloud GPU Pass</div><div class="metric-value" id="stat-gpu">-- ms</div></div>
+        <div><div class="metric-label">Union-Find Clusters</div><div class="metric-value" id="stat-clusters">-- (Max: --)</div></div>
+        <div><div class="metric-label">DSU Land / Water</div><div class="metric-value" id="stat-topology">-- Isl / -- Sea</div></div>
       </div>
     </div>
 
@@ -425,5 +217,6 @@
   </aside>
 
   <script type="module" src="./src/main.js"></script>
+  <script type="module" src="./scenarios-recorder.js"></script>
 </body>
 </html>
