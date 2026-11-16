@@ -35,7 +35,7 @@ A drop-in, zero-allocation **WebGL2 / Three.js Volumetric Cloud, Cyclone Vortex,
 
 ## System Architecture
 
-### 1. Graphviz Pipeline Diagram (`digraph AtmosphereEngine`)
+### 1. Atmosphere Engine Pipeline Diagram
 
 ```mermaid
 flowchart LR
