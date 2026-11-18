@@ -10,14 +10,16 @@ import {
 } from '../shaders/ocean.frag.js';
 
 /**
- * 4-wave directional Gerstner swell spectrum [dirX, dirZ, steepness, wavelength]
+ * 6-wave non-harmonic directional Gerstner swell spectrum [dirX, dirZ, steepness, wavelength, warpMul]
  * shared between the GPU vertex shader and CPU sampleWaterSurfaceHeight().
  */
 const GERSTNER_WAVES = [
-  [0.848, 0.530, 0.34, 62.0],
-  [0.574, -0.819, 0.26, 38.0],
-  [-0.423, 0.906, 0.20, 23.0],
-  [0.966, -0.259, 0.14, 14.0],
+  [0.731, 0.682, 0.28, 107.0, 1.0],
+  [-0.819, 0.574, 0.24, 67.0, -0.8],
+  [0.574, -0.819, 0.22, 41.0, 0.6],
+  [-0.375, 0.927, 0.18, 29.0, -0.5],
+  [0.951, -0.309, 0.15, 19.0, 0.4],
+  [0.375, 0.927, 0.12, 13.0, 0.0],
 ];
 
 /**
@@ -120,13 +122,14 @@ export class OceanLayer {
   sampleWaterSurfaceHeight(x, z, elapsed) {
     const s = this.state;
     let y = s.waterLevel;
+    const warp = Math.sin(x * 0.013 + z * 0.017) * 0.65;
 
     for (let i = 0; i < GERSTNER_WAVES.length; i++) {
-      const [dx, dz, steepness, wavelength] = GERSTNER_WAVES[i];
+      const [dx, dz, steepness, wavelength, warpMul] = GERSTNER_WAVES[i];
       const k = 6.2831853 / wavelength;
       const c = Math.sqrt(9.8 / k);
-      const a = (steepness / k) * 0.25 * s.waveScale;
-      y += a * Math.sin(k * (dx * x + dz * z - c * elapsed));
+      const a = (steepness / k) * 0.19 * s.waveScale;
+      y += a * Math.sin(k * (dx * x + dz * z - c * elapsed) + warp * warpMul);
     }
 
     if (s.tsunamiStrength > 0.01) {
