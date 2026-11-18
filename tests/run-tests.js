@@ -1,3 +1,7 @@
+/**
+ * Automated Node.js Unit, Front-End DOM Contract, and 4-Phase Live Physics Test Runner.
+ * Boots a mock browser DOM, executes all 14 suites, and prints a V8 code coverage report.
+ */
 import inspector from 'inspector';
 import fs from 'fs';
 import path from 'path';
@@ -8,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 
+/** Builds an in-memory mock DOM (elements, sliders, 2D canvas, RAF queue, and window events) for src/main.js. */
 export function setupMockBrowserEnvironment() {
   const elementsById = new Map();
   const presetBtns = [];

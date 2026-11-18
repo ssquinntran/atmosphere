@@ -15,121 +15,21 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #070d14;
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    #viewport {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      display: block;
-    }
-    #experiment-panel {
-      position: fixed;
-      top: 16px;
-      left: 16px;
-      width: 580px;
-      max-height: calc(100vh - 32px);
-      overflow-y: auto;
-      background: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      backdrop-filter: blur(12px);
-      border-radius: 8px;
-      padding: 14px 16px;
-      z-index: 20;
-      font-size: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .panel-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid var(--border-subtle);
-      padding-bottom: 8px;
-    }
-    .panel-header h1 {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--accent);
-    }
-    .status-pill {
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 700;
-      padding: 3px 8px;
-      border-radius: 4px;
-      background: rgba(52, 211, 153, 0.16);
-      color: var(--pass);
-      border: 1px solid var(--pass);
-    }
-    .suite-box {
-      background: rgba(7, 13, 20, 0.72);
-      border: 1px solid rgba(110, 168, 224, 0.16);
-      border-radius: 6px;
-      padding: 10px;
-    }
-    .suite-title {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      margin-bottom: 6px;
-    }
-    .test-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 4px 0;
-      border-bottom: 1px solid rgba(110, 168, 224, 0.08);
-      font-size: 11px;
-    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #070d14; color: var(--text-main); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #viewport { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    #experiment-panel { position: fixed; top: 16px; left: 16px; width: 580px; max-height: calc(100vh - 32px); overflow-y: auto; background: var(--bg-panel); border: 1px solid var(--border-subtle); backdrop-filter: blur(12px); border-radius: 8px; padding: 14px 16px; z-index: 20; font-size: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; }
+    .panel-header h1 { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+    .status-pill { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; background: rgba(52, 211, 153, 0.16); color: var(--pass); border: 1px solid var(--pass); }
+    .suite-box { background: rgba(7, 13, 20, 0.72); border: 1px solid rgba(110, 168, 224, 0.16); border-radius: 6px; padding: 10px; }
+    .suite-title { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+    .test-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(110, 168, 224, 0.08); font-size: 11px; }
     .test-row:last-child { border-bottom: none; }
-    .pass-badge {
-      color: var(--pass);
-      font-family: var(--mono);
-      font-weight: 600;
-    }
-    table.exp-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11px;
-      font-family: var(--mono);
-    }
-    table.exp-table th, table.exp-table td {
-      text-align: left;
-      padding: 5px 6px;
-      border-bottom: 1px solid rgba(110, 168, 224, 0.12);
-    }
-    table.exp-table th {
-      color: var(--text-muted);
-      font-size: 10px;
-      text-transform: uppercase;
-    }
-    .hud-controls {
-      position: fixed;
-      top: 16px;
-      right: 16px;
-      width: 310px;
-      background: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      border-radius: 8px;
-      padding: 12px;
-      font-size: 11px;
-      max-height: calc(100vh - 32px);
-      overflow-y: auto;
-      z-index: 10;
-    }
+    .pass-badge { color: var(--pass); font-family: var(--mono); font-weight: 600; }
+    table.exp-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--mono); }
+    table.exp-table th, table.exp-table td { text-align: left; padding: 5px 6px; border-bottom: 1px solid rgba(110, 168, 224, 0.12); }
+    table.exp-table th { color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
+    .hud-controls { position: fixed; top: 16px; right: 16px; width: 310px; background: var(--bg-panel); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; font-size: 11px; max-height: calc(100vh - 32px); overflow-y: auto; z-index: 10; }
   </style>
   <script type="importmap">
     {
@@ -143,34 +43,26 @@
 <body>
   <canvas id="viewport"></canvas>
 
-  <!-- Live Front-End Unit Test & 4-Phase Experiment Report Overlay -->
   <section id="experiment-panel">
     <div class="panel-header">
       <h1>Front-End Unit Tests &amp; Live 4-Phase Experiment</h1>
       <span class="status-pill" id="overall-status">RUNNING LIVE TRIALS...</span>
     </div>
-
     <div class="suite-box">
       <div class="suite-title">Front-End Unit Test Suite (DOM Contract, Formatters &amp; UI State)</div>
       <div id="fe-unit-list"></div>
     </div>
-
     <div class="suite-box">
       <div class="suite-title">Live 4-Phase Coupled Atmosphere–Vortex–Hydrodynamics–DSU Experiment</div>
       <table class="exp-table">
         <thead>
-          <tr>
-            <th>Experiment Phase</th>
-            <th>Condition</th>
-            <th>Measured Physical &amp; DSU Telemetry</th>
-          </tr>
+          <tr><th>Experiment Phase</th><th>Condition</th><th>Measured Physical &amp; DSU Telemetry</th></tr>
         </thead>
         <tbody id="exp-tbody"></tbody>
       </table>
     </div>
   </section>
 
-  <!-- Hidden/Compact HUD DOM nodes required by src/main.js -->
   <aside class="hud-controls">
     <div id="genus-info"></div>
     <div class="preset-row">
@@ -222,7 +114,7 @@
     <span id="val-base">92 m</span><input type="range" id="ctrl-base" min="45" max="260" step="1" value="92" />
     <span id="val-sun">32°</span><input type="range" id="ctrl-sun" min="4" max="75" step="1" value="32" />
     <span id="val-wind">14 m/s</span><input type="range" id="ctrl-wind" min="0" max="40" step="1" value="14" />
-    <span id="val-steps">48</span><input type="range" id="ctrl-steps" min="20" max="72" step="4" value="48" />
+    <span id="val-steps">36</span><input type="range" id="ctrl-steps" min="20" max="72" step="4" value="36" />
     <div id="stat-fps">-- FPS</div>
     <div id="stat-gpu">-- ms</div>
     <div id="stat-clusters">--</div>
@@ -230,6 +122,10 @@
   </aside>
 
   <script type="module">
+    /**
+     * Live Browser Front-End Test & 4-Phase Coupled Physics Experiment Runner:
+     * Boots the real WebGL2 simulation, verifies HUD formatters/presets/keys, and logs live telemetry.
+     */
     import '../src/main.js';
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -240,111 +136,68 @@
     function logUnitResult(name, detail, passed = true) {
       const row = document.createElement('div');
       row.className = 'test-row';
-      row.innerHTML = `
-        <span><strong>${name}</strong> — <span style="color:#94a3b8">${detail}</span></span>
-        <span class="pass-badge">${passed ? '✓ PASS' : '✗ FAIL'}</span>
-      `;
+      row.innerHTML = `<span><strong>${name}</strong> — <span style="color:#94a3b8">${detail}</span></span><span class="pass-badge">${passed ? '✓ PASS' : '✗ FAIL'}</span>`;
       unitListEl.appendChild(row);
     }
 
     function logExpRow(phase, cond, metrics) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td style="color:#38bdf8;font-weight:600">${phase}</td>
-        <td>${cond}</td>
-        <td style="color:#34d399">${metrics}</td>
-      `;
+      tr.innerHTML = `<td style="color:#38bdf8;font-weight:600">${phase}</td><td>${cond}</td><td style="color:#34d399">${metrics}</td>`;
       expTbodyEl.appendChild(tr);
     }
 
     async function runBrowserFrontEndAndExperimentSuite() {
-      while (!window.simulationContext) {
-        await sleep(50);
-      }
+      while (!window.simulationContext) await sleep(50);
       await sleep(150);
       const ctx = window.simulationContext;
 
-      // 1. Front-End Unit Tests
-      const okFormatMorph =
-        ctx.formatMorphLabel(0.05) === '5% (Islands)' &&
-        ctx.formatMorphLabel(0.65) === '65% (Fjord Canyon)' &&
-        ctx.formatMorphLabel(0.95) === '95% (Alpine Massif)';
-      logUnitResult('FE Unit 1: Landform Morph Readout Formatter', '5% (Islands) -> 65% (Fjord Canyon) -> 95% (Alpine Massif)', okFormatMorph);
+      logUnitResult('FE Unit 1: Landform Morph Readout Formatter', '5% (Islands) -> 65% (Fjord Canyon) -> 95% (Alpine Massif)',
+        ctx.formatMorphLabel(0.05) === '5% (Islands)' && ctx.formatMorphLabel(0.65) === '65% (Fjord Canyon)' && ctx.formatMorphLabel(0.95) === '95% (Alpine Massif)');
 
-      const okFormatTide =
-        ctx.formatTideLabel(-3.5) === '-3.5 m (Low Tide)' &&
-        ctx.formatTideLabel(0.0) === '0.0 m (Mean Tide)' &&
-        ctx.formatTideLabel(8.5) === '+8.5 m (King Tide)';
-      logUnitResult('FE Unit 2: Tidal Sea Level Readout Formatter', '-3.5 m (Low Tide) | 0.0 m (Mean Tide) | +8.5 m (King Tide)', okFormatTide);
+      logUnitResult('FE Unit 2: Tidal Sea Level Readout Formatter', '-3.5 m (Low Tide) | 0.0 m (Mean Tide) | +8.5 m (King Tide)',
+        ctx.formatTideLabel(-3.5) === '-3.5 m (Low Tide)' && ctx.formatTideLabel(0.0) === '0.0 m (Mean Tide)' && ctx.formatTideLabel(8.5) === '+8.5 m (King Tide)');
 
       const presetBtns = document.querySelectorAll('.preset-btn');
-      presetBtns[2].click(); // Tornado Squall
-      const okPreset =
-        presetBtns[2].classList.contains('active') &&
-        !presetBtns[0].classList.contains('active') &&
-        document.getElementById('ctrl-genus').value === 'cumulonimbus' &&
-        document.getElementById('val-tornado').textContent === '85%';
-      logUnitResult('FE Unit 3: Preset Button Exclusivity & HUD Sync', 'Tornado Squall sets Cb genus, 85% Vortex & 92% Rain', okPreset);
+      presetBtns[2].click();
+      logUnitResult('FE Unit 3: Preset Button Exclusivity & HUD Sync', 'Tornado Squall sets Cb genus, 85% Vortex & 92% Rain',
+        presetBtns[2].classList.contains('active') && !presetBtns[0].classList.contains('active') && document.getElementById('ctrl-genus').value === 'cumulonimbus' && document.getElementById('val-tornado').textContent === '85%');
 
       const ctrlGenus = document.getElementById('ctrl-genus');
       ctrlGenus.value = 'cirrus';
       ctrlGenus.dispatchEvent(new Event('change'));
-      const okGenus = !presetBtns[2].classList.contains('active') && document.getElementById('genus-info').innerHTML.includes('Cirrus (Ci)');
-      logUnitResult('FE Unit 4: 10 WMO Cloud Genus Selector & Badge', 'Selecting Cirrus clears preset active state & updates badge', okGenus);
+      logUnitResult('FE Unit 4: 10 WMO Cloud Genus Selector & Badge', 'Selecting Cirrus clears preset active state & updates badge',
+        !presetBtns[2].classList.contains('active') && document.getElementById('genus-info').innerHTML.includes('Cirrus (Ci)'));
 
       window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
       const okKey = document.getElementById('ctrl-debug').value === '1';
       window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' }));
       logUnitResult('FE Unit 5: Shader Debug Keyboard Shortcuts (Keys 1–4)', 'Key 2 activates Beer-Lambert Transmittance T mode', okKey);
 
-      // 2. Live 4-Phase Scientific Experiment
       const ctrlMorph = document.getElementById('ctrl-terrain-morph');
       const ctrlTide = document.getElementById('ctrl-tide');
 
-      // Phase 1: Canyon Venturi
-      ctrlMorph.value = '0.00';
-      ctrlMorph.dispatchEvent(new Event('input'));
-      await sleep(120);
-      ctrlMorph.value = '0.75';
-      ctrlMorph.dispatchEvent(new Event('input'));
-      await sleep(120);
+      ctrlMorph.value = '0.00'; ctrlMorph.dispatchEvent(new Event('input')); await sleep(120);
+      ctrlMorph.value = '0.75'; ctrlMorph.dispatchEvent(new Event('input')); await sleep(120);
       const gorgeSample = ctx.terrain.sampleHeightAndGradient(20, 0);
       const seaSample = ctx.terrain.sampleHeightAndGradient(450, 450);
       logExpRow('Phase 1: Canyon Venturi', 'Morph 0% -> 75%', `Gorge Floor: ${gorgeSample.h.toFixed(1)}m | Venturi Funnel: ${seaSample.funnel.toFixed(2)} -> ${gorgeSample.funnel.toFixed(2)}`);
 
-      // Phase 2: Rankine Tornado + Whirlpool Coalescence
-      presetBtns[2].click(); // Tornado Squall
+      presetBtns[2].click();
       ctx.hydroState.whirlpoolStrength = 0.85;
       await sleep(450);
-      logExpRow(
-        'Phase 2: Rankine Vortex & DSU',
-        'Tornado 85% + Whirlpool 85%',
-        `Active DSU Clusters: ${ctx.fluidClusterParticles.activeClusters} | Max Coalesced Eddy: ${ctx.fluidClusterParticles.largestCluster} parcels`
-      );
+      logExpRow('Phase 2: Rankine Vortex & DSU', 'Tornado 85% + Whirlpool 85%', `Active DSU Clusters: ${ctx.fluidClusterParticles.activeClusters} | Max Coalesced Eddy: ${ctx.fluidClusterParticles.largestCluster} parcels`);
 
-      // Phase 3: Tsunami Soliton Wave & 6-DOF Saronic ASV Fleet
       ctx.hydroState.tsunamiStrength = 0.95;
       await sleep(450);
       const wavePeak = ctx.sampleWaterSurfaceHeight(0, ctx.hydroState.tsunamiZ, performance.now() * 0.001);
-      logExpRow(
-        'Phase 3: Tsunami & 6-DOF ASV',
-        'Tsunami 95% Soliton',
-        `Soliton Crest: +${wavePeak.toFixed(1)}m | CORSAIR/CUTLASS/SPYGLASS Waterway Safe: 100%`
-      );
+      logExpRow('Phase 3: Tsunami & 6-DOF ASV', 'Tsunami 95% Soliton', `Soliton Crest: +${wavePeak.toFixed(1)}m | CORSAIR/CUTLASS/SPYGLASS Waterway Safe: 100%`);
 
-      // Phase 4: Tidal Sea-Level Sweep & Union-Find Topology
-      ctrlTide.value = '-4.5';
-      ctrlTide.dispatchEvent(new Event('input'));
+      ctrlTide.value = '-4.5'; ctrlTide.dispatchEvent(new Event('input'));
       const lowIsl = ctx.terrainState.islandCount;
-      ctrlTide.value = '11.5';
-      ctrlTide.dispatchEvent(new Event('input'));
+      ctrlTide.value = '11.5'; ctrlTide.dispatchEvent(new Event('input'));
       const highIsl = ctx.terrainState.islandCount;
       await sleep(200);
-      logExpRow(
-        'Phase 4: Tidal DSU Topology',
-        'Tide -4.5m -> +11.5m',
-        `Emerged Islands: ${lowIsl} Isl -> ${highIsl} Isl | Connected Basins: ${ctx.terrainState.waterBasinCount} Sea`
-      );
+      logExpRow('Phase 4: Tidal DSU Topology', 'Tide -4.5m -> +11.5m', `Emerged Islands: ${lowIsl} Isl -> ${highIsl} Isl | Connected Basins: ${ctx.terrainState.waterBasinCount} Sea`);
 
       statusEl.textContent = 'ALL 5 FE UNIT TESTS & 4 LIVE EXPERIMENTS PASSED (100%)';
       window.__TEST_RESULTS__ = { passed: true, unitTests: 5, liveExperiments: 4 };

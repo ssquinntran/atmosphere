@@ -1,5 +1,7 @@
 /**
  * Deterministic Three.js & WebGL2 Mock for Node.js Unit and Integration Testing.
+ * Provides lightweight math classes (Vector2/3/4, Color, Matrix4, Quaternion),
+ * geometry/texture/material stubs, and a mock WebGL2RenderingContext with timer queries.
  */
 
 export const GLSL3 = '300 es';
