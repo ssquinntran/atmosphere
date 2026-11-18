@@ -16,29 +16,32 @@ export const oceanVertexCommonGLSL = /* glsl */ `
   uniform float uWaveScale;
 
   // Adds one directional Gerstner trochoidal wave (horizontal pinch + vertical lift + crest foam).
-  void addGerstnerWave(vec2 xz, float t, vec2 dir, float steepness, float wavelength, inout vec3 disp, inout float foam) {
+  void addGerstnerWave(vec2 xz, float t, vec2 dir, float steepness, float wavelength, float phaseWarp, inout vec3 disp, inout float foam) {
     float k = 6.2831853 / wavelength;
     float c = sqrt(9.8 / k);
-    float a = (steepness / k) * 0.25 * uWaveScale;
-    float theta = k * (dot(dir, xz) - c * t);
+    float a = (steepness / k) * 0.19 * uWaveScale;
+    float theta = k * (dot(dir, xz) - c * t) + phaseWarp;
     float s = sin(theta);
     float cs = cos(theta);
     disp.x += dir.x * (a * steepness * cs);
     disp.z += dir.y * (a * steepness * cs);
     disp.y += a * s;
-    foam += max(0.0, s) * steepness * 0.28;
+    foam += max(0.0, s) * steepness * 0.24;
   }
 
-  // Evaluates combined Gerstner swells + tidal level + tsunami, whirlpool, tornado & hurricane.
+  // Evaluates 6 non-harmonic Gerstner swells (with organic phase warp) + tidal/tsunami/whirlpool/storm surge.
   vec3 evalOceanDisplacement(vec2 xz, float t, out float outFoam) {
     outFoam = 0.0;
     vec3 disp = vec3(0.0, uHydroA.w, 0.0);
+    float warp = sin(xz.x * 0.013 + xz.y * 0.017) * 0.65;
 
-    addGerstnerWave(xz, t, vec2(0.848, 0.530), 0.34, 62.0, disp, outFoam);
-    addGerstnerWave(xz, t, vec2(0.574, -0.819), 0.26, 38.0, disp, outFoam);
-    addGerstnerWave(xz, t, vec2(-0.423, 0.906), 0.20, 23.0, disp, outFoam);
-    addGerstnerWave(xz, t, vec2(0.966, -0.259), 0.14, 14.0, disp, outFoam);
-    outFoam = clamp(outFoam * (0.65 + 0.35 * uWaveScale) - 0.14, 0.0, 0.65);
+    addGerstnerWave(xz, t, vec2(0.731, 0.682), 0.28, 107.0, warp, disp, outFoam);
+    addGerstnerWave(xz, t, vec2(-0.819, 0.574), 0.24, 67.0, -warp * 0.8, disp, outFoam);
+    addGerstnerWave(xz, t, vec2(0.574, -0.819), 0.22, 41.0, warp * 0.6, disp, outFoam);
+    addGerstnerWave(xz, t, vec2(-0.375, 0.927), 0.18, 29.0, -warp * 0.5, disp, outFoam);
+    addGerstnerWave(xz, t, vec2(0.951, -0.309), 0.15, 19.0, warp * 0.4, disp, outFoam);
+    addGerstnerWave(xz, t, vec2(0.375, 0.927), 0.12, 13.0, 0.0, disp, outFoam);
+    outFoam = clamp(outFoam * (0.65 + 0.35 * uWaveScale) - 0.16, 0.0, 0.68);
 
     float tsunamiStr = uHydroA.x;
     if (tsunamiStr > 0.01) {
