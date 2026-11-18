@@ -95,6 +95,11 @@ const hydroState = {
   waterLevel: 0.0,
 };
 
+/**
+ * CPU-side wave height evaluator mirroring the ocean vertex shader (evalOceanHeight).
+ * Sums tidal sea level, ambient swells, tsunami soliton, whirlpool depression, and storm surge
+ * so the 3 Saronic ASVs and 512 sea-spray particles ride the exact same surface as the GPU mesh.
+ */
 function sampleWaterSurfaceHeight(x, z, elapsed) {
   let y = hydroState.waterLevel + Math.sin(x * 0.045 + elapsed * 1.9) * 0.55 + Math.cos(z * 0.038 - elapsed * 1.6) * 0.45;
 
@@ -302,6 +307,10 @@ const terrainState = {
   waterBasinCount: 1,
 };
 
+/**
+ * Builds the 112x112 morphable terrain mesh (0% Archipelago Islands -> 100% Alpine Fjord Massifs)
+ * with GPU cloud-shadow & snowline shaders, and updates the 56x56 terrainMap + DSU topology counts.
+ */
 function createMorphableTerrain() {
   const segs = 220;
   const gridRes = segs + 1;
@@ -540,6 +549,7 @@ const fluidClusterParticles = new LagrangianVortexParticleSystem(512);
 baseScene.add(fluidClusterParticles.points);
 
 // 4. 100% GPU Hardware-Accelerated Topographic Wind Streamlines
+/** Builds 240 GPU-advected wind ribbons that deflect around mountains and swirl into cyclones. */
 function createAirflowStreamlines(streamCount = 240, segsPerStream = 8) {
   const totalVerts = streamCount * segsPerStream * 2;
   const positions = new Float32Array(totalVerts * 3);
@@ -712,6 +722,7 @@ function createSaronicDeckEmblemTexture(accentCss) {
   return tex;
 }
 
+/** Assembles a 3D Saronic Autonomous Surface Vessel (hull, deckhouse, radar mast, nav lights). */
 function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, scale = 1.0 }) {
   const group = new THREE.Group();
 
@@ -803,6 +814,7 @@ function createSaronicASVMesh({ vesselClass, hullNumber, accentHex, accentCss, s
   return { group, bannerMesh };
 }
 
+/** Returns parametric (x, z) patrol coordinates keeping each vessel centered in the fjord channels. */
 function sampleFleetWaterwayPath(routeType, t) {
   if (routeType === 'mainFjordNorthSouth') {
     const z = Math.sin(t) * 440.0;
@@ -1006,6 +1018,7 @@ function updateNorthPoleEasterEgg(elapsed) {
 }
 
 // 6. GPU-Accelerated 3D Rain Streak System
+/** Builds 9,000 camera-wrapped GPU precipitation lines that morph from rain -> sleet -> snowflakes. */
 function createPrecipitationSystem(dropCount = 9000) {
   const geo = new THREE.BufferGeometry();
   const positions = new Float32Array(dropCount * 6);
@@ -1085,6 +1098,7 @@ const rainSystem = createPrecipitationSystem(9000);
 baseScene.add(rainSystem.lines);
 
 // 7. GPU-Accelerated 3D Branched Cloud-to-Ground & Intra-Cloud Lightning Bolt System
+/** Builds 6 jagged cloud-to-sea lightning bolts with diagonal branches flickering via uLightningIntensity. */
 function createLightningBoltSystem(boltCount = 6, segsPerBolt = 18) {
   const segsTotalPerBolt = segsPerBolt + 12;
   const totalVerts = boltCount * segsTotalPerBolt * 2;
@@ -1196,6 +1210,7 @@ function createLightningBoltSystem(boltCount = 6, segsPerBolt = 18) {
 const lightningSystem = createLightningBoltSystem(6, 18);
 baseScene.add(lightningSystem.lines);
 
+/** Synchronizes directional sun, exponential fog, temperature uniforms, rain/snow, and lightning. */
 function syncSceneLighting() {
   const s = atmosphere.state;
   sunLight.position.copy(atmosphere.getSunDirection()).multiplyScalar(600);
@@ -1442,6 +1457,7 @@ let activeCameraView = 'free';
 const _prevBoatPos = new THREE.Vector3();
 let _hasPrevBoatPos = false;
 
+/** Switches camera perspective between Free Orbit, ASV-01..03 Deck View, and -20°C Santa's Sleigh. */
 function applyCameraView(view, snap = true) {
   activeCameraView = view;
   if (view === 'free') {
@@ -1549,6 +1565,7 @@ const blitMat = new THREE.ShaderMaterial({
 });
 blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
 
+/** Resizes full-res sceneTarget and half-res (0.5x) cloudTarget after window resize or context restore. */
 function syncRenderTargets() {
   renderer.getDrawingBufferSize(drawingSize);
   sceneTarget.setSize(drawingSize.x, drawingSize.y);
@@ -1620,6 +1637,12 @@ const _particleParams = {
   sampleWaterHeight: _sampleWaterNow,
 };
 
+/**
+ * Zero-allocation main render loop driven by requestAnimationFrame:
+ * 1) Updates 6-DOF boat wave riding + follow-camera delta
+ * 2) Steps 3D Spatial Hash + Union-Find fluid particle physics
+ * 3) Runs 3 GPU passes: baseScene -> 0.5x cloudTarget -> bilinear blitScene composite
+ */
 function animate(now) {
   if (isContextLost) return;
   rafId = requestAnimationFrame(animate);
