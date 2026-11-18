@@ -36,6 +36,7 @@ export class OceanLayer {
     this.uHydroA = { value: new THREE.Vector4(0.0, 280.0, 0.0, 0.0) };
     this.uHydroB = { value: new THREE.Vector4(0.0, -10.0, 0.0, 65.0) };
     this.uTornadoStrength = { value: 0.0 };
+    this.uWaveScale = { value: 1.6 };
 
     this.state = {
       tornadoStrength: 0.0,
@@ -48,6 +49,7 @@ export class OceanLayer {
       whirlpoolX: 0.0,
       whirlpoolZ: -10.0,
       waterLevel: 0.0,
+      waveScale: 1.6,
     };
 
     this.geometry = null;
@@ -61,9 +63,9 @@ export class OceanLayer {
     this.geometry.rotateX(-Math.PI / 2);
 
     this.material = new THREE.MeshStandardMaterial({
-      color: 0x0a3656,
-      roughness: 0.22,
-      metalness: 0.65,
+      color: 0x072b45,
+      roughness: 0.14,
+      metalness: 0.35,
     });
 
     this.material.onBeforeCompile = (shader) => {
@@ -74,6 +76,7 @@ export class OceanLayer {
         uHydroA: this.uHydroA,
         uHydroB: this.uHydroB,
         uTornadoStrength: this.uTornadoStrength,
+        uWaveScale: this.uWaveScale,
       });
 
       shader.vertexShader = shader.vertexShader
@@ -104,6 +107,12 @@ export class OceanLayer {
     this.uRainIntensity.value = intensity;
   }
 
+  /** Scales the 4-wave Gerstner swell amplitude and crest foam (0.5x = calm, 3.2x+ = rough seas). */
+  setWaveScale(scale) {
+    this.state.waveScale = scale;
+    this.uWaveScale.value = scale;
+  }
+
   /**
    * CPU-side mirror of evalOceanDisplacement(): evaluates 4-wave Gerstner swells plus
    * tidal level, tsunami soliton, whirlpool depression, and tornado/hurricane surge at (x, z, elapsed).
@@ -116,7 +125,7 @@ export class OceanLayer {
       const [dx, dz, steepness, wavelength] = GERSTNER_WAVES[i];
       const k = 6.2831853 / wavelength;
       const c = Math.sqrt(9.8 / k);
-      const a = (steepness / k) * 0.25;
+      const a = (steepness / k) * 0.25 * s.waveScale;
       y += a * Math.sin(k * (dx * x + dz * z - c * elapsed));
     }
 
