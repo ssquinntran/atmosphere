@@ -1,3 +1,8 @@
+/**
+ * Automated 10-Scenario Extreme Weather Video Studio:
+ * Steps through SCENARIOS_10, animates camera sweeps, composites the HUD onto an offscreen 2D canvas,
+ * and records 30 FPS .webm videos via MediaRecorder (saved locally by video_server.py).
+ */
 import { CLOUD_GENERA, STORM_TYPES } from './src/layers/AtmosphereLayer.js';
 
 export const SCENARIOS_10 = [
@@ -629,6 +634,7 @@ async function recordSingleScenario(simCtx, sc, recCanvas, recCtx, durationMs = 
   return blob.size;
 }
 
+/** Mounts the "Record 10 Extreme Weather Videos" studio panel into the HUD and binds MediaRecorder. */
 function initScenarioRecorderUI() {
   const simCtx = window.simulationContext;
   if (!simCtx) return;
