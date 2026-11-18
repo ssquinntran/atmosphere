@@ -6,18 +6,20 @@
 
 export const oceanVertexCommonGLSL = /* glsl */ `
   varying vec3 vOceanWorldPos;
+  varying vec3 vOceanNormal;
   varying float vFoamIntensity;
   uniform vec4 uWindAndTime;
   uniform vec4 uWorldOriginOffset;
   uniform vec4 uHydroA;
   uniform vec4 uHydroB;
   uniform float uTornadoStrength;
+  uniform float uWaveScale;
 
   // Adds one directional Gerstner trochoidal wave (horizontal pinch + vertical lift + crest foam).
   void addGerstnerWave(vec2 xz, float t, vec2 dir, float steepness, float wavelength, inout vec3 disp, inout float foam) {
     float k = 6.2831853 / wavelength;
     float c = sqrt(9.8 / k);
-    float a = (steepness / k) * 0.25;
+    float a = (steepness / k) * 0.25 * uWaveScale;
     float theta = k * (dot(dir, xz) - c * t);
     float s = sin(theta);
     float cs = cos(theta);
@@ -36,7 +38,7 @@ export const oceanVertexCommonGLSL = /* glsl */ `
     addGerstnerWave(xz, t, vec2(0.574, -0.819), 0.26, 38.0, disp, outFoam);
     addGerstnerWave(xz, t, vec2(-0.423, 0.906), 0.20, 23.0, disp, outFoam);
     addGerstnerWave(xz, t, vec2(0.966, -0.259), 0.14, 14.0, disp, outFoam);
-    outFoam = clamp(outFoam - 0.18, 0.0, 0.45);
+    outFoam = clamp(outFoam * (0.65 + 0.35 * uWaveScale) - 0.14, 0.0, 0.65);
 
     float tsunamiStr = uHydroA.x;
     if (tsunamiStr > 0.01) {
@@ -90,5 +92,6 @@ export const oceanVertexNormalGLSL = /* glsl */ `
 export const oceanVertexPositionGLSL = /* glsl */ `
   transformed += dispC;
   vFoamIntensity = clamp(foamCenter, 0.0, 1.0);
+  vOceanNormal = normalize(mat3(modelMatrix) * objectNormal);
   vOceanWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
 `;

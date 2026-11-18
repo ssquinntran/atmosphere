@@ -5,6 +5,7 @@
 
 export const oceanFragmentCommonGLSL = /* glsl */ `
   varying vec3 vOceanWorldPos;
+  varying vec3 vOceanNormal;
   varying float vFoamIntensity;
   uniform sampler2D uWeatherMap;
   uniform vec4 uWindAndTime;
@@ -34,7 +35,28 @@ export const oceanFragmentDitherGLSL = /* glsl */ `
   float cloudDensityShadow = smoothstep(1.0 - uBoundsMaxAndCoverage.w * 1.35, 1.0, texture2D(uWeatherMap, weatherUV).r);
 
   vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
-  gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) * cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
+  float tRip = uWindAndTime.z;
+  // Fast 3-wave capillary micro-ripple normal perturbation (zero texture lookups)
+  vec2 ripGrad = vec2(
+    cos(globalWaveXZ.x * 0.55 + globalWaveXZ.y * 0.25 + tRip * 2.6) * 0.14 +
+    cos(globalWaveXZ.x * 1.15 - globalWaveXZ.y * 0.70 - tRip * 3.4) * 0.09 +
+    cos(globalWaveXZ.x * 2.10 + globalWaveXZ.y * 1.65 + tRip * 4.5) * 0.05,
+    sin(globalWaveXZ.y * 0.62 - globalWaveXZ.x * 0.30 + tRip * 2.3) * 0.14 +
+    sin(globalWaveXZ.y * 1.25 + globalWaveXZ.x * 0.65 - tRip * 3.1) * 0.09 +
+    sin(globalWaveXZ.y * 2.20 - globalWaveXZ.x * 1.50 + tRip * 4.2) * 0.05
+  );
+  vec3 N = normalize(vOceanNormal + vec3(ripGrad.x, 0.0, ripGrad.y));
+  vec3 V = normalize(cameraPosition - vOceanWorldPos);
+  vec3 H = normalize(sunDir + V);
+
+  // Schlick Fresnel sky reflection + deep water trough absorption + subsurface crest scatter
+  float fresnel = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 4.2);
+  vec3 deepWater = vec3(0.014, 0.095, 0.19);
+  vec3 skyReflect = vec3(0.38, 0.64, 0.88);
+  vec3 waterCol = mix(deepWater, skyReflect, fresnel * 0.78);
+  waterCol += vec3(0.03, 0.26, 0.30) * (0.25 + 0.75 * vFoamIntensity) * max(0.0, dot(V, -sunDir) * 0.5 + 0.5);
+  float sunGlint = pow(max(dot(N, H), 0.0), 140.0);
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, waterCol, 0.68) + vec3(1.0, 0.96, 0.86) * (sunGlint * 1.15);
 
   if (vFoamIntensity > 0.01) {
     float foamTex = 0.65 + 0.35 * sin(globalWaveXZ.x * 0.45 + uWindAndTime.z * 3.0) * cos(globalWaveXZ.y * 0.45);
