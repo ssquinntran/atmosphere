@@ -33,6 +33,7 @@ export function setupMockBrowserEnvironment() {
         add: (c) => classListSet.add(c),
         remove: (c) => classListSet.delete(c),
         contains: (c) => classListSet.has(c),
+        toggle: (c, force) => (force ?? !classListSet.has(c)) ? classListSet.add(c) : classListSet.delete(c),
       },
       addEventListener(type, cb) {
         if (!listeners[type]) listeners[type] = [];
@@ -395,6 +396,7 @@ async function runAllSuites() {
     ocean.dispose(); // guard when uninitialized
     ocean.init(new THREE.Scene());
     ocean.setRainIntensity(0.75);
+    ocean.setWaveScale(3.2);
     const hCalm = ocean.sampleWaterSurfaceHeight(0, 0, 1.0);
     assert.ok(Number.isFinite(hCalm));
 
@@ -521,6 +523,9 @@ async function runAllSuites() {
     fireInput('ctrl-whirlpool', '0.80');
 
     for (const tideVal of ['-3.5', '0.0', '2.5', '8.0']) fireInput('ctrl-tide', tideVal);
+    fireInput('ctrl-wave-scale', '3.0');
+    globalThis.document.getElementById('btn-rough-seas').click();
+    globalThis.document.getElementById('btn-rough-seas').click();
     domEnv.stepAnimationFrame(35.0);
 
     for (const morphVal of ['0.10', '0.35', '0.65', '0.92']) fireInput('ctrl-terrain-morph', morphVal);
