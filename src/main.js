@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { AtmosphereLayer, CLOUD_GENERA, STORM_TYPES } from './layers/AtmosphereLayer.js';
+import { OceanLayer } from './layers/OceanLayer.js';
 import {
   LagrangianVortexParticleSystem,
   analyzeTerrainTopologyUnionFind,
@@ -95,208 +96,12 @@ const hydroState = {
   waterLevel: 0.0,
 };
 
-/**
- * CPU-side wave height evaluator mirroring the ocean vertex shader (evalOceanHeight).
- * Sums tidal sea level, ambient swells, tsunami soliton, whirlpool depression, and storm surge
- * so the 3 Saronic ASVs and 512 sea-spray particles ride the exact same surface as the GPU mesh.
- */
-function sampleWaterSurfaceHeight(x, z, elapsed) {
-  let y = hydroState.waterLevel + Math.sin(x * 0.045 + elapsed * 1.9) * 0.55 + Math.cos(z * 0.038 - elapsed * 1.6) * 0.45;
-
-  if (hydroState.tsunamiStrength > 0.01) {
-    const dz = z - hydroState.tsunamiZ;
-    y += 26.0 * hydroState.tsunamiStrength * Math.exp(-(dz * dz) / 2312.0) * (1.0 + 0.35 * Math.tanh(-dz * 0.08));
-  }
-
-  if (hydroState.whirlpoolStrength > 0.01) {
-    const dx = x - hydroState.whirlpoolX;
-    const dz = z - hydroState.whirlpoolZ;
-    const r2 = dx * dx + dz * dz;
-    y -= 15.5 * hydroState.whirlpoolStrength * Math.exp(-r2 / 3872.0);
-    y += 1.8 * hydroState.whirlpoolStrength * Math.sin(Math.sqrt(r2) * 0.16 - elapsed * 6.5) * Math.exp(-r2 / 11250.0);
-  }
-
-  if (hydroState.tornadoStrength > 0.01) {
-    const dx = x - hydroState.tornadoX;
-    const dz = z - hydroState.tornadoZ;
-    const dr = Math.sqrt(dx * dx + dz * dz) - 24.0;
-    y += 2.6 * hydroState.tornadoStrength * Math.exp(-(dr * dr) / 196.0);
-  }
-
-  if (hydroState.hurricaneStrength > 0.01) {
-    const dx = x - hydroState.tornadoX;
-    const dz = z - hydroState.tornadoZ;
-    const r2 = dx * dx + dz * dz;
-    const r = Math.sqrt(r2);
-    const dr = (r - 88.0) / 38.0;
-    y += (5.2 * Math.exp(-r2 / 26450.0) + 3.4 * Math.sin(r * 0.11 - elapsed * 5.2) * Math.exp(-(dr * dr))) * hydroState.hurricaneStrength;
-  }
-
-  return y;
-}
-
-// 1. Subdivided Vertex-Displaced Ocean Surface
+// 1. Subdivided Gerstner Ocean & Hydrodynamics Layer
 const sharedCloudUniforms = atmosphere.getSharedGroundUniforms();
-const uRainSplashUniform = { value: 0.0 };
 const uTemperatureUniform = { value: 18.0 };
-const uHydroParamsA = { value: new THREE.Vector4(0.0, 280.0, 0.0, 0.0) };
-const uHydroParamsB = { value: new THREE.Vector4(0.0, -10.0, 0.0, 65.0) };
-const uTornadoStrengthUniform = { value: 0.0 };
-
-const oceanGeo = new THREE.PlaneGeometry(1400, 1400, 128, 128);
-oceanGeo.rotateX(-Math.PI / 2);
-
-const oceanMat = new THREE.MeshStandardMaterial({
-  color: 0x0a3656,
-  roughness: 0.22,
-  metalness: 0.65,
-});
-
-oceanMat.onBeforeCompile = (shader) => {
-  Object.assign(shader.uniforms, {
-    uWeatherMap: sharedCloudUniforms.uWeatherMap,
-    uWindAndTime: sharedCloudUniforms.uWindAndTime,
-    uBoundsMinAndFade: sharedCloudUniforms.uBoundsMinAndFade,
-    uBoundsMaxAndCoverage: sharedCloudUniforms.uBoundsMaxAndCoverage,
-    uSunDirAndElevation: sharedCloudUniforms.uSunDirAndElevation,
-    uWorldOriginOffset: sharedCloudUniforms.uWorldOriginOffset,
-    uRainIntensity: uRainSplashUniform,
-    uTemperature: uTemperatureUniform,
-    uHydroA: uHydroParamsA,
-    uHydroB: uHydroParamsB,
-    uTornadoStrength: uTornadoStrengthUniform,
-  });
-
-  shader.vertexShader = shader.vertexShader
-    .replace(
-      '#include <common>',
-      `#include <common>
-      varying vec3 vOceanWorldPos;
-      varying float vFoamIntensity;
-      uniform vec4 uWindAndTime;
-      uniform vec4 uWorldOriginOffset;
-      uniform vec4 uHydroA;
-      uniform vec4 uHydroB;
-      uniform float uTornadoStrength;
-
-      float evalOceanHeight(vec2 xz, float t, out float outFoam) {
-        outFoam = 0.0;
-        float h = uHydroA.w + sin(xz.x * 0.045 + t * 1.9) * 0.55 + cos(xz.y * 0.038 - t * 1.6) * 0.45;
-
-        float tsunamiStr = uHydroA.x;
-        if (tsunamiStr > 0.01) {
-          float dz = xz.y - uHydroA.y;
-          float waveH = 26.0 * tsunamiStr * exp(-(dz * dz) / 2312.0) * (1.0 + 0.35 * tanh(-dz * 0.08));
-          h += waveH;
-          outFoam += smoothstep(8.0, 22.0, waveH) * 0.95;
-        }
-
-        float whirlStr = uHydroA.z;
-        if (whirlStr > 0.01) {
-          vec2 dW = xz - uHydroB.xy;
-          float r2 = dot(dW, dW);
-          float r = sqrt(r2);
-          float spiralArm = sin((atan(dW.y, dW.x) + t * 4.8 - r * 0.14) * 3.0) * 0.5 + 0.5;
-          h -= 15.5 * whirlStr * exp(-r2 / 3872.0);
-          h += 1.8 * whirlStr * (spiralArm - 0.5) * exp(-r2 / 11250.0);
-          outFoam += whirlStr * exp(-r2 / 8450.0) * (0.35 + 0.65 * spiralArm);
-        }
-
-        if (uTornadoStrength > 0.01) {
-          float rT = length(xz - uHydroB.zw);
-          float dr = (rT - 24.0) / 14.0;
-          h += 2.6 * uTornadoStrength * exp(-(dr * dr));
-          outFoam += uTornadoStrength * exp(-rT / 48.0) * 0.9;
-        }
-
-        float hurricaneStr = uWorldOriginOffset.w;
-        if (hurricaneStr > 0.01) {
-          vec2 dH = xz - uHydroB.zw;
-          float r2H = dot(dH, dH);
-          float rH = sqrt(r2H);
-          float drH = (rH - 88.0) / 38.0;
-          float eyewallRing = exp(-(drH * drH));
-          h += (5.2 * exp(-r2H / 26450.0) + 3.4 * sin(rH * 0.11 - t * 5.2) * eyewallRing) * hurricaneStr;
-          outFoam += hurricaneStr * eyewallRing * 0.85;
-        }
-        return h;
-      }`
-    )
-    .replace(
-      '#include <beginnormal_vertex>',
-      `#include <beginnormal_vertex>
-      float tWave = uWindAndTime.z;
-      float foamCenter = 0.0, dummyF = 0.0;
-      float hC = evalOceanHeight(position.xz, tWave, foamCenter);
-      float hX = evalOceanHeight(position.xz + vec2(2.5, 0.0), tWave, dummyF);
-      float hZ = evalOceanHeight(position.xz + vec2(0.0, 2.5), tWave, dummyF);
-      objectNormal = normalize(vec3(hC - hX, 2.5, hC - hZ));`
-    )
-    .replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-      transformed.y += hC;
-      vFoamIntensity = clamp(foamCenter, 0.0, 1.0);
-      vOceanWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
-    );
-
-  shader.fragmentShader = shader.fragmentShader
-    .replace(
-      '#include <common>',
-      `#include <common>
-      varying vec3 vOceanWorldPos;
-      varying float vFoamIntensity;
-      uniform sampler2D uWeatherMap;
-      uniform vec4 uWindAndTime;
-      uniform vec4 uBoundsMinAndFade;
-      uniform vec4 uBoundsMaxAndCoverage;
-      uniform vec4 uSunDirAndElevation;
-      uniform vec4 uWorldOriginOffset;
-      uniform float uRainIntensity;
-      uniform float uTemperature;
-
-      float rainRingPattern(vec2 p, float t) {
-        vec2 cell = floor(p);
-        vec2 f = fract(p) - 0.5;
-        float h = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
-        float phase = fract(t * 1.85 + h);
-        float ring = 1.0 - smoothstep(0.0, 0.055, abs(length(f) - phase * 0.46));
-        return ring * (1.0 - phase) * step(0.42, h);
-      }`
-    )
-    .replace(
-      '#include <dithering_fragment>',
-      `
-      vec3 sunDir = normalize(uSunDirAndElevation.xyz);
-      float tCloudPlane = max((uBoundsMinAndFade.y - vOceanWorldPos.y) / max(sunDir.y, 0.08), 0.0);
-      vec2 shadowWorldXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy + sunDir.xz * tCloudPlane;
-      vec2 weatherUV = (shadowWorldXZ - uBoundsMinAndFade.xz) / (uBoundsMaxAndCoverage.xz - uBoundsMinAndFade.xz) + uWindAndTime.xy * uWindAndTime.z * 0.00085;
-      float cloudDensityShadow = smoothstep(1.0 - uBoundsMaxAndCoverage.w * 1.35, 1.0, texture2D(uWeatherMap, weatherUV).r);
-
-      vec2 globalWaveXZ = vOceanWorldPos.xz + uWorldOriginOffset.xy;
-      gl_FragColor.rgb += vec3(0.015, 0.035, 0.05) * sin(globalWaveXZ.x * 0.18 + uWindAndTime.z * 1.8) * cos(globalWaveXZ.y * 0.18 - uWindAndTime.z * 1.4);
-
-      if (vFoamIntensity > 0.01) {
-        float foamTex = 0.65 + 0.35 * sin(globalWaveXZ.x * 0.45 + uWindAndTime.z * 3.0) * cos(globalWaveXZ.y * 0.45);
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.88, 0.96, 1.0), clamp(vFoamIntensity * foamTex, 0.0, 0.92));
-      }
-
-      if (uRainIntensity > 0.01) {
-        float splash = (rainRingPattern(globalWaveXZ * 0.38, uWindAndTime.z) + rainRingPattern(globalWaveXZ * 0.52 + vec2(17.3, 9.1), uWindAndTime.z * 1.15)) * uRainIntensity;
-        gl_FragColor.rgb += vec3(0.18, 0.25, 0.32) * splash;
-      }
-
-      float frost = clamp((1.0 - uTemperature) / 18.0, 0.0, 1.0);
-      if (frost > 0.01) {
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.76, 0.89, 0.96), frost * (0.28 + 0.55 * vFoamIntensity));
-      }
-
-      gl_FragColor.rgb *= mix(1.0, 0.42, cloudDensityShadow * 0.82);
-      #include <dithering_fragment>`
-    );
-};
-
-baseScene.add(new THREE.Mesh(oceanGeo, oceanMat));
+const ocean = new OceanLayer({ sharedCloudUniforms, temperatureUniform: uTemperatureUniform });
+ocean.init(baseScene);
+const sampleWaterSurfaceHeight = (x, z, elapsed) => ocean.sampleWaterSurfaceHeight(x, z, elapsed);
 
 // 2. Continuous Morphable Landform System + GPU Topographic Height/Flow Map (uTerrainMap)
 const terrainState = {
@@ -1223,8 +1028,8 @@ function syncSceneLighting() {
 
   uTemperatureUniform.value = s.temperature;
   const effectivePrecip = Math.max(s.rainIntensity, s.temperature <= 0 ? 0.45 : 0.0);
-  uRainSplashUniform.value = s.temperature <= 0 ? 0.0 : s.rainIntensity;
-  uTornadoStrengthUniform.value = hydroState.tornadoStrength;
+  ocean.setRainIntensity(s.temperature <= 0 ? 0.0 : s.rainIntensity);
+  ocean.setHydroState(hydroState);
 
   rainSystem.lines.visible = effectivePrecip > 0.01;
   rainSystem.mat.uniforms.uRainIntensity.value = effectivePrecip;
@@ -1660,8 +1465,7 @@ function animate(now) {
   hydroState.tornadoZ = tornadoZ;
   hydroState.tsunamiZ = 380.0 - ((elapsed * 75.0) % 760.0);
 
-  uHydroParamsA.value.set(hydroState.tsunamiStrength, hydroState.tsunamiZ, hydroState.whirlpoolStrength, hydroState.waterLevel);
-  uHydroParamsB.value.set(hydroState.whirlpoolX, hydroState.whirlpoolZ, tornadoX, tornadoZ);
+  ocean.setHydroState(hydroState);
   atmosphere.setVortexAndTide(tornadoX, tornadoZ, hydroState.tornadoStrength, hydroState.waterLevel);
 
   for (const v of fleet) {
@@ -1766,6 +1570,7 @@ window.simulationContext = {
   camera,
   controls,
   atmosphere,
+  ocean,
   terrain,
   fluidClusterParticles,
   fleet,
