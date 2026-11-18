@@ -1049,6 +1049,8 @@ const ctrlHurricane = $('ctrl-hurricane');
 const ctrlTsunami = $('ctrl-tsunami');
 const ctrlWhirlpool = $('ctrl-whirlpool');
 const ctrlTide = $('ctrl-tide');
+const ctrlWaveScale = $('ctrl-wave-scale');
+const btnRoughSeas = $('btn-rough-seas');
 const ctrlTerrainMorph = $('ctrl-terrain-morph');
 const ctrlPeakHeight = $('ctrl-peak-height');
 const ctrlCanyonDepth = $('ctrl-canyon-depth');
@@ -1110,6 +1112,8 @@ function refreshControlReadouts() {
   ctrlTsunami.value = hydroState.tsunamiStrength;
   ctrlWhirlpool.value = hydroState.whirlpoolStrength;
   ctrlTide.value = hydroState.waterLevel;
+  ctrlWaveScale.value = ocean.state.waveScale;
+  btnRoughSeas.classList.toggle('active', ocean.state.waveScale >= 3.0);
   ctrlTerrainMorph.value = terrainState.morph;
   ctrlPeakHeight.value = terrainState.peakHeight;
   ctrlCanyonDepth.value = terrainState.canyonDepth;
@@ -1131,6 +1135,7 @@ function refreshControlReadouts() {
   $('val-tsunami').textContent = `${Math.round(hydroState.tsunamiStrength * 100)}%`;
   $('val-whirlpool').textContent = `${Math.round(hydroState.whirlpoolStrength * 100)}%`;
   $('val-tide').textContent = formatTideLabel(hydroState.waterLevel);
+  $('val-wave-scale').textContent = `${ocean.state.waveScale.toFixed(1)}×`;
   $('val-terrain-morph').textContent = formatMorphLabel(terrainState.morph);
   $('val-peak-height').textContent = `${Math.round(terrainState.peakHeight)} m`;
   $('val-canyon-depth').textContent = `${Math.round(terrainState.canyonDepth * 100)}%`;
@@ -1217,6 +1222,16 @@ ctrlTide.addEventListener('input', (e) => {
   hydroState.waterLevel = parseFloat(e.target.value);
   atmosphere.setVortexAndTide(hydroState.tornadoX, hydroState.tornadoZ, hydroState.tornadoStrength, hydroState.waterLevel);
   terrain.updateGeometry();
+  refreshControlReadouts();
+});
+
+ctrlWaveScale.addEventListener('input', (e) => {
+  ocean.setWaveScale(parseFloat(e.target.value));
+  refreshControlReadouts();
+});
+
+btnRoughSeas.addEventListener('click', () => {
+  ocean.setWaveScale(ocean.state.waveScale >= 3.0 ? 1.6 : 3.2);
   refreshControlReadouts();
 });
 
