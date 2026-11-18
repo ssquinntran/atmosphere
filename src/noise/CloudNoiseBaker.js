@@ -10,15 +10,12 @@ void main() {
 
 const bake3DFragmentShader = /* glsl */ `
 precision highp float;
-
 out vec4 fragColor;
 
-uniform vec2 uAtlasSize;     // e.g. (512, 512)
-uniform float uVolumeRes;    // e.g. 64.0
-uniform float uTilesPerRow;  // e.g. 8.0
-uniform float uBaseFreq;     // 4.0 for macro, 6.0 for detail
+uniform float uVolumeRes;
+uniform float uTilesPerRow;
+uniform float uBaseFreq;
 
-// Periodic 3D hash for seamless RepeatWrapping across [0..period)
 vec3 hash33(vec3 p, float period) {
   p = mod(p, period);
   p = vec3(
@@ -49,10 +46,7 @@ float periodicPerlin3D(vec3 uvw, float period) {
   float nx01 = mix(n001, n101, u.x);
   float nx11 = mix(n011, n111, u.x);
 
-  float nxy0 = mix(nx00, nx10, u.y);
-  float nxy1 = mix(nx01, nx11, u.y);
-
-  return mix(nxy0, nxy1, u.z) * 0.5 + 0.5;
+  return mix(mix(nx00, nx10, u.y), mix(nx01, nx11, u.y), u.z) * 0.5 + 0.5;
 }
 
 float periodicWorley3D(vec3 uvw, float period) {
@@ -65,9 +59,7 @@ float periodicWorley3D(vec3 uvw, float period) {
     for (int y = -1; y <= 1; y++) {
       for (int x = -1; x <= 1; x++) {
         vec3 offset = vec3(float(x), float(y), float(z));
-        vec3 neighbor = id + offset;
-        vec3 jitter = hash33(neighbor, period);
-        vec3 diff = offset + jitter - fd;
+        vec3 diff = offset + hash33(id + offset, period) - fd;
         minDist = min(minDist, dot(diff, diff));
       }
     }
@@ -76,9 +68,7 @@ float periodicWorley3D(vec3 uvw, float period) {
 }
 
 float perlinFbm(vec3 uvw, float baseFreq) {
-  float sum = 0.0;
-  float amp = 0.5;
-  float freq = baseFreq;
+  float sum = 0.0, amp = 0.5, freq = baseFreq;
   for (int i = 0; i < 4; i++) {
     sum += amp * periodicPerlin3D(uvw, freq);
     freq *= 2.0;
@@ -92,32 +82,26 @@ void main() {
   float tileX = floor(px.x / uVolumeRes);
   float tileY = floor(px.y / uVolumeRes);
   float zSlice = tileY * uTilesPerRow + tileX;
-
-  vec2 localXY = mod(px, uVolumeRes);
-  vec3 uvw = (vec3(localXY, zSlice) + 0.5) / uVolumeRes;
+  vec3 uvw = (vec3(mod(px, uVolumeRes), zSlice) + 0.5) / uVolumeRes;
 
   float pFbm = perlinFbm(uvw, uBaseFreq);
   float w0 = periodicWorley3D(uvw, uBaseFreq);
   float w1 = periodicWorley3D(uvw, uBaseFreq * 2.0);
   float w2 = periodicWorley3D(uvw, uBaseFreq * 4.0);
 
-  // Perlin-Worley blend produces billowy cumulus cellular lobes
-  float perlinWorley = mix(pFbm, w0, 0.55);
-
-  fragColor = vec4(perlinWorley, w0, w1, w2);
+  fragColor = vec4(mix(pFbm, w0, 0.55), w0, w1, w2);
 }
 `;
 
 /**
- * Generates tileable 3D cloud noise volumes on the GPU in < 15 ms using a 2D slice-atlas
- * pass (avoiding Windows Chrome ANGLE D3D11 3D FBO attachment issues), plus a 2D weather
- * coverage map and blue-noise jitter texture.
+ * Pre-bakes tileable 3D Perlin-Worley volume textures, 2D weather maps, and blue-noise jitter
+ * once at boot on the GPU so the volumetric raymarcher only performs fast hardware texture lookups.
  */
 export class CloudNoiseBaker {
+  /** Render a tiled 2D atlas on the GPU and unpack Z-slices via TypedArray.set() into a Data3DTexture. */
   static bakeVolumeTexture(renderer, resolution, tilesPerRow, baseFreq) {
-    const tilesPerCol = resolution / tilesPerRow;
     const atlasW = resolution * tilesPerRow;
-    const atlasH = resolution * tilesPerCol;
+    const atlasH = resolution * (resolution / tilesPerRow);
 
     const rt = new THREE.WebGLRenderTarget(atlasW, atlasH, {
       minFilter: THREE.NearestFilter,
@@ -133,7 +117,6 @@ export class CloudNoiseBaker {
       vertexShader: bakeVertexShader,
       fragmentShader: bake3DFragmentShader,
       uniforms: {
-        uAtlasSize: { value: new THREE.Vector2(atlasW, atlasH) },
         uVolumeRes: { value: resolution },
         uTilesPerRow: { value: tilesPerRow },
         uBaseFreq: { value: baseFreq },
@@ -153,23 +136,16 @@ export class CloudNoiseBaker {
     const atlasPixels = new Uint8Array(atlasW * atlasH * 4);
     renderer.readRenderTargetPixels(rt, 0, 0, atlasW, atlasH, atlasPixels);
 
-    // Unpack 2D tile atlas into contiguous 3D voxel buffer
     const volumeData = new Uint8Array(resolution * resolution * resolution * 4);
+    const rowBytes = resolution * 4;
     for (let z = 0; z < resolution; z++) {
-      const tileX = z % tilesPerRow;
-      const tileY = Math.floor(z / tilesPerRow);
-      const startX = tileX * resolution;
-      const startY = tileY * resolution;
-
+      const startX = (z % tilesPerRow) * resolution;
+      const startY = Math.floor(z / tilesPerRow) * resolution;
+      const zBase = z * resolution * resolution * 4;
       for (let y = 0; y < resolution; y++) {
-        for (let x = 0; x < resolution; x++) {
-          const srcIdx = ((startY + y) * atlasW + (startX + x)) * 4;
-          const dstIdx = (z * resolution * resolution + y * resolution + x) * 4;
-          volumeData[dstIdx] = atlasPixels[srcIdx];
-          volumeData[dstIdx + 1] = atlasPixels[srcIdx + 1];
-          volumeData[dstIdx + 2] = atlasPixels[srcIdx + 2];
-          volumeData[dstIdx + 3] = atlasPixels[srcIdx + 3];
-        }
+        const srcStart = ((startY + y) * atlasW + startX) * 4;
+        const dstStart = zBase + y * rowBytes;
+        volumeData.set(atlasPixels.subarray(srcStart, srcStart + rowBytes), dstStart);
       }
     }
 
@@ -187,14 +163,15 @@ export class CloudNoiseBaker {
     tex3D.wrapR = THREE.RepeatWrapping;
     tex3D.unpackAlignment = 1;
     tex3D.needsUpdate = true;
-
     return tex3D;
   }
 
+  /**
+   * Generate a tileable 2D RGBA weather map:
+   * R = cloud coverage, G = cloud vertical height scale, B = cumulonimbus anvil mask.
+   */
   static createWeatherMap(size = 256) {
     const data = new Uint8Array(size * size * 4);
-
-    // Periodic multi-octave value noise for synoptic cloud fronts
     const hash2 = (ix, iy, period) => {
       const x = ((ix % period) + period) % period;
       const y = ((iy % period) + period) % period;
@@ -203,40 +180,25 @@ export class CloudNoiseBaker {
     };
 
     const valueNoise2D = (u, v, period) => {
-      const x = u * period;
-      const y = v * period;
-      const ix = Math.floor(x);
-      const iy = Math.floor(y);
-      const fx = x - ix;
-      const fy = y - iy;
+      const x = u * period, y = v * period;
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
       const ux = fx * fx * (3.0 - 2.0 * fx);
       const uy = fy * fy * (3.0 - 2.0 * fy);
-
       const a = hash2(ix, iy, period);
       const b = hash2(ix + 1, iy, period);
       const c = hash2(ix, iy + 1, period);
       const d = hash2(ix + 1, iy + 1, period);
-
       return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
     };
 
     for (let y = 0; y < size; y++) {
+      const v = y / size;
       for (let x = 0; x < size; x++) {
         const u = x / size;
-        const v = y / size;
-
-        const cov =
-          0.50 * valueNoise2D(u, v, 3) +
-          0.32 * valueNoise2D(u, v, 7) +
-          0.18 * valueNoise2D(u, v, 14);
-
-        // Stretch contrast of weather map so clouds have distinct, sculpted formations
+        const cov = 0.50 * valueNoise2D(u, v, 3) + 0.32 * valueNoise2D(u, v, 7) + 0.18 * valueNoise2D(u, v, 14);
         const contrastedCov = Math.min(Math.max((cov - 0.12) * 1.32, 0.0), 1.0);
-
-        const heightScale =
-          0.65 * valueNoise2D(u + 0.31, v + 0.17, 3) +
-          0.35 * valueNoise2D(u + 0.31, v + 0.17, 6);
-
+        const heightScale = 0.65 * valueNoise2D(u + 0.31, v + 0.17, 3) + 0.35 * valueNoise2D(u + 0.31, v + 0.17, 6);
         const anvilMask = valueNoise2D(u + 0.63, v + 0.41, 4);
 
         const idx = (y * size + x) * 4;
@@ -256,17 +218,15 @@ export class CloudNoiseBaker {
     return tex;
   }
 
+  /** Generate a 64x64 Interleaved Gradient Noise texture used to dither raymarch start offsets. */
   static createBlueNoiseJitter(size = 64) {
-    // Low-discrepancy R2 / interleaved gradient sequence for artifact-free jitter
     const data = new Uint8Array(size * size * 4);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const ign = (52.9829189 * ((0.06711056 * x + 0.00583715 * y) % 1.0)) % 1.0;
         const idx = (y * size + x) * 4;
         const val = Math.round(ign * 255);
-        data[idx] = val;
-        data[idx + 1] = val;
-        data[idx + 2] = val;
+        data[idx] = data[idx + 1] = data[idx + 2] = val;
         data[idx + 3] = 255;
       }
     }
