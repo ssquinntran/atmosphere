@@ -57,7 +57,7 @@ const sceneTarget = new THREE.WebGLRenderTarget(drawingSize.x, drawingSize.y, {
   depthTexture,
 });
 
-const CLOUD_RES_SCALE = 0.5;
+const CLOUD_RES_SCALE = 1.0;
 const cloudTarget = new THREE.WebGLRenderTarget(
   Math.max(1, Math.floor(drawingSize.x * CLOUD_RES_SCALE)),
   Math.max(1, Math.floor(drawingSize.y * CLOUD_RES_SCALE)),
@@ -1553,7 +1553,7 @@ function animate(now) {
   renderer.clear();
   renderer.render(baseScene, camera);
 
-  // Pass 2: Half-resolution (0.5x) volumetric cloud raymarching pass
+  // Pass 2: Full-resolution (1.0x) volumetric cloud raymarching pass
   renderer.setRenderTarget(cloudTarget);
   renderer.setClearColor(0x000000, 0.0);
   renderer.clear();
