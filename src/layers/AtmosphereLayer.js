@@ -3,12 +3,14 @@ import { atmosphereVertexShader } from '../shaders/atmosphere.vert.js';
 import { atmosphereFragmentShader } from '../shaders/atmosphere.frag.js';
 import { CloudNoiseBaker } from '../noise/CloudNoiseBaker.js';
 
+/** Debug visualization modes selectable via keys 1–4 or the HUD dropdown. */
 export const DEBUG_MODES = { final: 0, transmittance: 1, depth: 2, noise: 3 };
 
 const defGenus = (id, name, etage, description, coverage, baseAltitude, slabThickness, extinction, densityMultiplier, rainIntensity, shapeParams) => ({
   id, name, etage, description, coverage, baseAltitude, slabThickness, extinction, densityMultiplier, rainIntensity, shapeParams,
 });
 
+/** Physical & visual profiles for all 10 WMO cloud genera (low, middle, high, and towering convective). */
 export const CLOUD_GENERA = {
   cumulus:       defGenus(0, 'Cumulus (Cu)',       'Low (90–260 m)',        'Detached cauliflower towers with crisp flat bases and sunlit domes.',   0.64,  92, 165, 0.088, 1.65, 0.0,  [1.05, 0.95, 0.92, 0.08]),
   stratus:       defGenus(1, 'Stratus (St)',       'Low (55–140 m)',        'Uniform featureless gray layer hugging the lower atmosphere.',          0.86,  58,  85, 0.072, 1.45, 0.18, [0.52, 1.85, 0.15, 0.02]),
@@ -26,6 +28,7 @@ const defStorm = (id, name, description, cloudGenus, coverage, windSpeed, rainIn
   id, name, description, cloudGenus, coverage, windSpeed, rainIntensity, lightningIntensity, fogDensity, tornadoStrength, hurricaneStrength, sunElevationDeg, sunColor, sunIntensity, skyColor,
 });
 
+/** Parameter presets for the 6 cyclonic / convective storm regimes. */
 export const STORM_TYPES = {
   none:             defStorm(0, 'Fair Weather (No Cyclone)',                    'Calm maritime trade winds with no active cyclonic vortex.',                     'cumulus',      0.65, 14, 0.00, 0.00, 0.22, 0.00, 0.00, 32, 0xfff5e0, 3.6, 0x4f86c6),
   waterspout:       defStorm(1, 'Maritime Waterspout (Rankine Tube)',           'Slender Rankine vortex tube connecting cumulus base to a sea-spray collar.',    'cumulonimbus', 0.76, 22, 0.48, 0.35, 0.38, 0.72, 0.00, 24, 0xffe2b8, 3.0, 0x43668a),
@@ -69,6 +72,10 @@ export const WEATHER_PRESETS = {
   hurricane:   buildPreset('hurricane', { baseAltitude: 64, slabThickness: 305, sunAzimuthDeg: 48, extinction: 0.115, densityMultiplier: 1.98 }),
 };
 
+/**
+ * Self-contained WebGL2 / Three.js volumetric cloud, cyclone, lightning, and fog layer.
+ * Renders an inverted BackSide proxy box whose fragment shader raymarches 3D Perlin-Worley noise.
+ */
 export class AtmosphereLayer {
   constructor(options = {}) {
     this.mapExtent = options.mapExtent ?? 1200;
