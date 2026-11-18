@@ -242,6 +242,7 @@ async function runAllSuites() {
     WEATHER_PRESETS,
     DEBUG_MODES,
   } = await import('../src/layers/AtmosphereLayer.js');
+  const { OceanLayer } = await import('../src/layers/OceanLayer.js');
 
   await runTest('Unit: DisjointSetUnion', 'Initializes singleton sets & handles reset(0) edge case', () => {
     const dsu = new DisjointSetUnion(8);
@@ -387,6 +388,31 @@ async function runAllSuites() {
     rawLayer.onContextRestored(new THREE.WebGLRenderer());
     rawLayer.init(new THREE.WebGLRenderer(), new THREE.Scene());
     rawLayer.dispose();
+  });
+
+  await runTest('Unit: OceanLayer', 'Evaluates 4-wave Gerstner swells, tsunami soliton, whirlpool & storm surge', () => {
+    const ocean = new OceanLayer();
+    ocean.dispose(); // guard when uninitialized
+    ocean.init(new THREE.Scene());
+    ocean.setRainIntensity(0.75);
+    const hCalm = ocean.sampleWaterSurfaceHeight(0, 0, 1.0);
+    assert.ok(Number.isFinite(hCalm));
+
+    ocean.setHydroState({
+      waterLevel: 2.0,
+      tsunamiStrength: 0.9,
+      tsunamiZ: 0.0,
+      whirlpoolStrength: 0.8,
+      whirlpoolX: 0.0,
+      whirlpoolZ: 0.0,
+      tornadoStrength: 0.9,
+      tornadoX: 24.0,
+      tornadoZ: 0.0,
+      hurricaneStrength: 0.9,
+    });
+    const hStorm = ocean.sampleWaterSurfaceHeight(0, 0, 1.0);
+    assert.ok(Number.isFinite(hStorm) && hStorm !== hCalm);
+    ocean.dispose();
   });
 
   await runTest('Unit: AtmosphereLayer', 'Switches across all 10 WMO cloud genera, presets, debug modes & GPU timer states', () => {
